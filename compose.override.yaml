@@ -46,3 +46,40 @@ services:
       - no-new-privileges:true
     stop_grace_period: 30s
     restart: unless-stopped
+
+  relay:
+    image: flash-ticket/relay:${IMAGE_TAG:-dev-1.0.0-local}
+    build:
+      context: .
+      dockerfile: services/relay/Dockerfile
+    environment:
+      DATABASE_URL: mysql+pymysql://flash:${MYSQL_PASSWORD:?Missing MYSQL_PASSWORD}@mysql:3306/flash_ticket
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Missing REDIS_PASSWORD}@redis:6379/0
+
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_EC2_METADATA_DISABLED: "true"
+
+      QUEUE_NAME: flash-ticket-bookings
+      OUTBOX_POLL_SECONDS: "1"
+      LEASE_SECONDS: "120"
+      LOG_LEVEL: INFO
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 120s
+    restart: unless-stopped
