@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480">
+  <rect width="1200" height="480" fill="#101828"></rect>
+  <circle cx="1050" cy="180" r="260" fill="#12392f"></circle>
+  <circle cx="1050" cy="180" r="200" fill="none" stroke="#34d399" stroke-width="3"></circle>
+  <circle cx="1050" cy="180" r="140" fill="none" stroke="#34d399" stroke-width="3"></circle>
+  <text x="80" y="130" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="24" letter-spacing="6">FLASH / TICKET</text>
+  <text x="80" y="250" fill="#ffffff" font-family="Arial, sans-serif" font-size="70" font-weight="bold">FLASH NIGHT LIVE</text>
+  <text x="84" y="320" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="27">ONE NIGHT. ONE CHANCE.</text>
+</svg>

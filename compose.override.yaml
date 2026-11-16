@@ -129,3 +129,105 @@ services:
       - no-new-privileges:true
     stop_grace_period: 120s
     restart: unless-stopped
+
+  catalog:
+    image: flash-ticket/catalog:${IMAGE_TAG:-dev-1.0.0-local}
+    build:
+      context: .
+      dockerfile: services/catalog/Dockerfile
+    environment:
+      MONGODB_URL: mongodb://flash:${MONGO_PASSWORD:?Missing MONGO_PASSWORD}@mongo:27017/flash_ticket?authSource=admin
+      MONGODB_DATABASE: flash_ticket
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Missing REDIS_PASSWORD}@redis:6379/0
+
+      AUTH_PROVIDER: ${AUTH_PROVIDER:-jwt}
+      JWT_PUBLIC_KEY_PATH: /app/keys/public.pem
+      JWT_ISSUER: flash-ticket-local
+      JWT_AUDIENCE: flash-ticket-api
+
+      COGNITO_REGION: ${COGNITO_REGION:-us-east-1}
+      COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID:-}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+      COGNITO_SCOPE_PREFIX: ${COGNITO_SCOPE_PREFIX:-flash-ticket}
+
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_EC2_METADATA_DISABLED: "true"
+
+      S3_PUBLIC_ENDPOINT: http://localhost:4566
+      ASSETS_BUCKET: flash-ticket-assets
+      ASSETS_PUBLIC_BASE_URL: ${ASSETS_PUBLIC_BASE_URL:-}
+    volumes:
+      - ./.secrets/public.pem:/app/keys/public.pem:ro
+    ports:
+      - "127.0.0.1:${CATALOG_PORT:-8002}:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+          'http://127.0.0.1:8000/readyz', timeout=5)
+      interval: 10s
+      timeout: 6s
+      retries: 10
+      start_period: 15s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  frontend:
+    image: flash-ticket/frontend:${IMAGE_TAG:-dev-1.0.0-local}
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+        VITE_AUTH_PROVIDER: ${AUTH_PROVIDER:-jwt}
+        VITE_COGNITO_AUTHORITY: ${COGNITO_AUTHORITY:-}
+        VITE_COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+        VITE_COGNITO_DOMAIN: ${COGNITO_DOMAIN:-}
+        VITE_OIDC_SCOPE: ${COGNITO_OIDC_SCOPE:-openid email profile flash-ticket/bookings:write}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      booking:
+        condition: service_healthy
+      catalog:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1:8080/healthz
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
