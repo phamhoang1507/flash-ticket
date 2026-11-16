@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
 from shared.auth import Principal, get_verifier, require_scope
+from shared.aws import aws_client
 
 logger = logging.getLogger(__name__)
 
@@ -290,3 +291,46 @@ def get_booking(booking_id: UUID, buyer: Buyer):
         raise HTTPException(404, "Booking not found")
 
     return view(row)
+
+@app.get("/bookings/{booking_id}/ticket")
+def get_ticket(booking_id: UUID, buyer: Buyer):
+    with engine.connect() as connection:
+        row = connection.execute(
+            text("""
+                SELECT status, ticket_key
+                FROM bookings
+                WHERE id = :booking_id
+                  AND user_id = :user_id
+            """),
+            {
+                "booking_id": str(booking_id),
+                "user_id": buyer.subject,
+            },
+        ).mappings().first()
+
+    if row is None:
+        raise HTTPException(404, "Booking not found")
+
+    if row["status"] != "ISSUED" or not row["ticket_key"]:
+        raise HTTPException(409, "Ticket is not ready")
+
+    expires_in = 120
+
+    url = aws_client("s3", public=True).generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": os.getenv(
+                "ASSETS_BUCKET", "flash-ticket-assets"
+            ),
+            "Key": row["ticket_key"],
+            "ResponseContentDisposition": (
+                f'attachment; filename="ticket-{booking_id}.pdf"'
+            ),
+        },
+        ExpiresIn=expires_in,
+    )
+
+    return {
+        "url": url,
+        "expires_in": expires_in,
+    }

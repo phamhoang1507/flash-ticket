@@ -1,0 +1,6 @@
+SQLAlchemy==2.0.57
+PyMySQL[rsa]==1.2.4
+boto3==1.44.3
+reportlab==5.1.0
+qrcode[pil]==8.2
+Pillow==13.0.0
