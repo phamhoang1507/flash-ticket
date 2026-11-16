@@ -1,0 +1,48 @@
+services:
+  booking:
+    image: flash-ticket/booking:${IMAGE_TAG:-dev-1.0.0-local}
+    build:
+      context: .
+      dockerfile: services/booking/Dockerfile
+    environment:
+      DATABASE_URL: mysql+pymysql://flash:${MYSQL_PASSWORD:?Missing MYSQL_PASSWORD}@mysql:3306/flash_ticket
+
+      AUTH_PROVIDER: ${AUTH_PROVIDER:-jwt}
+      JWT_PUBLIC_KEY_PATH: /app/keys/public.pem
+      JWT_ISSUER: flash-ticket-local
+      JWT_AUDIENCE: flash-ticket-api
+
+      COGNITO_REGION: ${COGNITO_REGION:-us-east-1}
+      COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID:-}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+      COGNITO_SCOPE_PREFIX: ${COGNITO_SCOPE_PREFIX:-flash-ticket}
+    volumes:
+      - ./.secrets/public.pem:/app/keys/public.pem:ro
+    ports:
+      - "127.0.0.1:${BOOKING_PORT:-8001}:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+          'http://127.0.0.1:8000/readyz', timeout=5)
+      interval: 10s
+      timeout: 6s
+      retries: 10
+      start_period: 15s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    restart: unless-stopped
