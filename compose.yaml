@@ -1,0 +1,97 @@
+name: flash-ticket
+
+services:
+  mysql:
+    image: mysql:8.4.13
+    environment:
+      MYSQL_DATABASE: flash_ticket
+      MYSQL_USER: flash
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Missing MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Missing MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          MYSQL_PWD="$$MYSQL_PASSWORD"
+          mysql --protocol=TCP -h 127.0.0.1
+          -u flash -D flash_ticket -e "SELECT 1" >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:8.0.38
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: flash
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?Missing MONGO_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --host 127.0.0.1
+          --username "$$MONGO_INITDB_ROOT_USERNAME"
+          --password "$$MONGO_INITDB_ROOT_PASSWORD"
+          --authenticationDatabase admin
+          --eval 'quit(db.adminCommand({ping:1}).ok === 1 ? 0 : 1)'
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.8.4-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?Missing REDIS_PASSWORD}
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Missing REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  localstack:
+    image: localstack/localstack:4.14.0
+    environment:
+      SERVICES: s3,sqs,ses
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      LOCALSTACK_HOST: localstack:4566
+      SQS_ENDPOINT_STRATEGY: path
+      PERSISTENCE: "0"
+    ports:
+      - "127.0.0.1:4566:4566"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+          'http://localhost:4566/_localstack/health', timeout=3)
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  mongo-data:
+  redis-data:
