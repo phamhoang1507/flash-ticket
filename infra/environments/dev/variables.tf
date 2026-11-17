@@ -41,3 +41,9 @@ variable "enable_nat_gateway" {
   type    = bool
   default = false
 }
+
+variable "ecr_force_delete" {
+  description = "Allow deletion of dev repositories containing images."
+  type        = bool
+  default     = false
+}
