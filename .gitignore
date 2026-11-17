@@ -17,3 +17,4 @@ output/
 *.tfvars
 *.tfplan
 crash.log
+backend.hcl
