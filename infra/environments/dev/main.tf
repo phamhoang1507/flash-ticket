@@ -21,12 +21,3 @@ module "vpc" {
   availability_zones = var.availability_zones
   enable_nat_gateway = var.enable_nat_gateway
 }
-
-module "ecr" {
-  source = "../../modules/ecr"
-
-  name_prefix           = "flash-ticket-${var.environment}"
-  image_tag_prefix      = "${var.environment}-"
-  image_retention_count = 5
-  force_delete          = var.ecr_force_delete
-}
