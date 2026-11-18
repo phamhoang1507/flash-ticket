@@ -1129,3 +1129,116 @@ for TASK_SNAPSHOT_ID in $TASK_MONGO_SNAPSHOT_IDS; do
     --region us-east-1
 done
 ```
+
+## 24. MongoDB private EC2
+
+MongoDB chạy trong Private Data subnet AZ A, không public IP.
+
+Kết nối:
+
+- Catalog tới MongoDB qua TCP 27017.
+- Máy quản trị tới MongoDB qua EC2 Instance Connect Endpoint và SSH.
+- Không cần NAT Gateway cho SSH qua endpoint.
+
+Cấu hình:
+
+```hcl
+enable_mongodb          = true
+mongodb_instance_type   = "t3.micro"
+enable_mongo_ami_builder = false
+```
+
+AMI ID nằm trong:
+
+```text
+infra/environments/dev/mongodb-ami.auto.tfvars
+```
+
+### SSH
+
+```bash
+bash scripts/ssh-mongodb.sh
+```
+
+Kiểm tra service:
+
+```bash
+bash scripts/ssh-mongodb.sh \
+  "sudo systemctl is-active mongod"
+```
+
+SSH key được lưu trong `.secrets/`.
+Public key được gửi qua EC2 Instance Connect cho mỗi lần kết nối.
+
+### Lấy instance ID
+
+```bash
+TASK_MONGO_ID="$(
+  terraform -chdir=infra/environments/dev output -json mongodb \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["instance_id"])'
+)"
+```
+
+### Stop và giữ database
+
+```bash
+aws ec2 stop-instances \
+  --instance-ids "$TASK_MONGO_ID" \
+  --profile flash-ticket-terraform \
+  --region us-east-1
+
+aws ec2 wait instance-stopped \
+  --instance-ids "$TASK_MONGO_ID" \
+  --profile flash-ticket-terraform \
+  --region us-east-1
+```
+
+EBS storage vẫn tính phí khi instance stopped.
+
+### Start lại
+
+```bash
+aws ec2 start-instances \
+  --instance-ids "$TASK_MONGO_ID" \
+  --profile flash-ticket-terraform \
+  --region us-east-1
+
+aws ec2 wait instance-status-ok \
+  --instance-ids "$TASK_MONGO_ID" \
+  --profile flash-ticket-terraform \
+  --region us-east-1
+```
+
+Không cần Terraform apply chỉ để start instance đã stop.
+
+### Xóa riêng MongoDB
+
+Đổi `enable_mongodb = false` trong terraform.tfvars.
+
+```bash
+bash scripts/tf-dev.sh plan \
+  -out=mongodb-down.tfplan
+
+bash scripts/tf-dev.sh apply \
+  mongodb-down.tfplan
+```
+
+Thao tác xóa MongoDB instance, root volume và management endpoint cùng
+Security Groups/rules dành riêng cho management.
+
+RDS và Redis giữ nguyên nếu không có thay đổi cấu hình khác.
+
+AMI và AMI snapshot vẫn tồn tại, được dọn theo mục AMI builder.
+
+### Dữ liệu và cập nhật
+
+Database hiện nằm trên root volume 12 GiB.
+
+- Stop/start giữ dữ liệu.
+- Destroy hoặc thay thế instance xóa root volume và database.
+- AMI hoặc user data thay đổi có thể làm instance bị thay thế.
+- Node mới cần bootstrap database users và dữ liệu.
+- Cập nhật packages thực hiện qua quy trình bake AMI mới.
+
+MongoDB hiện là single-node cho dev.
+Thiết kế replica set và backup production sẽ được xử lý riêng.

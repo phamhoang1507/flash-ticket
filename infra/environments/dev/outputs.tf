@@ -40,3 +40,8 @@ output "mongo_ami_builder" {
   description = "Temporary MongoDB AMI builder."
   value       = module.mongo_ami_builder.builder
 }
+
+output "mongodb" {
+  description = "Private MongoDB instance and management endpoint."
+  value       = module.data_layer.mongodb
+}

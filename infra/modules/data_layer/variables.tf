@@ -170,3 +170,49 @@ variable "redis_snapshot_retention_days" {
     error_message = "Snapshot retention must be an integer between 0 and 35."
   }
 }
+
+variable "vpc_id" {
+  description = "VPC containing the data layer."
+  type        = string
+}
+
+variable "enable_mongodb" {
+  description = "Create the private MongoDB instance and management endpoint."
+  type        = bool
+  default     = false
+}
+
+variable "mongodb_ami_id" {
+  description = "MongoDB AMI built in the current AWS account."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      !var.enable_mongodb ||
+      can(regex("^ami-[0-9a-f]{17}$", var.mongodb_ami_id))
+    )
+    error_message = "A valid MongoDB AMI ID is required when MongoDB is enabled."
+  }
+}
+
+variable "mongodb_subnet_id" {
+  description = "Private Data subnet used for MongoDB."
+  type        = string
+}
+
+variable "mongodb_management_subnet_id" {
+  description = "Subnet used for EC2 Instance Connect Endpoint."
+  type        = string
+}
+
+variable "mongodb_security_group_id" {
+  description = "Existing security group allowing Catalog to reach MongoDB."
+  type        = string
+}
+
+variable "mongodb_instance_type" {
+  description = "MongoDB EC2 instance type."
+  type        = string
+  default     = "t3.micro"
+}

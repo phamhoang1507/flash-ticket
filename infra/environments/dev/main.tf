@@ -26,6 +26,7 @@ module "data_layer" {
   source = "../../modules/data_layer"
 
   name_prefix = "flash-ticket-dev"
+  vpc_id      = module.vpc.vpc_id
 
   private_data_subnet_ids = [
     module.vpc.private_data_subnet_ids["a"],
@@ -54,6 +55,16 @@ module "data_layer" {
   redis_auth_token              = var.redis_auth_token
   redis_auth_token_version      = var.redis_auth_token_version
   redis_snapshot_retention_days = var.redis_snapshot_retention_days
+
+  enable_mongodb        = var.enable_mongodb
+  mongodb_ami_id        = var.mongodb_ami_id
+  mongodb_instance_type = var.mongodb_instance_type
+
+  mongodb_subnet_id = module.vpc.private_data_subnet_ids["a"]
+
+  mongodb_management_subnet_id = module.vpc.private_app_subnet_ids["a"]
+
+  mongodb_security_group_id = module.vpc.security_group_ids["mongodb"]
 }
 
 module "mongo_ami_builder" {

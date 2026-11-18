@@ -276,6 +276,7 @@ Các phần đã có cấu hình:
 - SSM Standard SecureString secrets.
 - RDS MySQL private, cấu hình Single-AZ cho dev.
 - ElastiCache Redis.
+- EC2 MongoDB private và EC2 Instance Connect Endpoint.
 
 Các phần triển khai tiếp theo:
 

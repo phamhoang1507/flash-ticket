@@ -127,3 +127,21 @@ variable "enable_mongo_ami_builder" {
   type        = bool
   default     = false
 }
+
+variable "enable_mongodb" {
+  description = "Enable the private MongoDB node and management endpoint."
+  type        = bool
+  default     = false
+}
+
+variable "mongodb_ami_id" {
+  description = "AMI used for the private MongoDB node."
+  type        = string
+  default     = ""
+}
+
+variable "mongodb_instance_type" {
+  description = "MongoDB EC2 instance type."
+  type        = string
+  default     = "t3.micro"
+}

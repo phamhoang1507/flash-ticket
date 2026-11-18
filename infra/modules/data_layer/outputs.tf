@@ -21,3 +21,15 @@ output "redis" {
     node_type            = aws_elasticache_replication_group.redis[0].node_type
   } : null
 }
+
+output "mongodb" {
+  description = "Private MongoDB instance and management endpoint."
+
+  value = var.enable_mongodb ? {
+    instance_id                  = aws_instance.mongodb[0].id
+    private_ip                   = aws_instance.mongodb[0].private_ip
+    private_dns                  = aws_instance.mongodb[0].private_dns
+    availability_zone            = aws_instance.mongodb[0].availability_zone
+    instance_connect_endpoint_id = aws_ec2_instance_connect_endpoint.mongodb[0].id
+  } : null
+}
