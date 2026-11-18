@@ -30,3 +30,8 @@ output "rds" {
   description = "Non-secret connection information for development MySQL."
   value       = module.data_layer.mysql
 }
+
+output "redis" {
+  description = "Non-secret Redis connection information."
+  value       = module.data_layer.redis
+}

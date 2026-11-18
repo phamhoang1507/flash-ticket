@@ -96,3 +96,77 @@ variable "rds_final_snapshot_identifier" {
   type        = string
   default     = null
 }
+
+variable "enable_redis" {
+  description = "Create the Redis resources when enabled."
+  type        = bool
+  default     = false
+}
+
+variable "redis_security_group_id" {
+  description = "Security group controlling Redis connections."
+  type        = string
+}
+
+variable "redis_availability_zones" {
+  description = "Two Availability Zones used for Redis placement."
+  type        = list(string)
+
+  validation {
+    condition = (
+      length(var.redis_availability_zones) == 2 &&
+      length(distinct(var.redis_availability_zones)) == 2
+    )
+    error_message = "Exactly two distinct Availability Zones are required."
+  }
+}
+
+variable "redis_node_type" {
+  description = "ElastiCache Redis node type."
+  type        = string
+  default     = "cache.t3.micro"
+}
+
+variable "redis_auth_token" {
+  description = "Ephemeral Redis AUTH token loaded from SSM."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+
+  validation {
+    condition = (
+      length(var.redis_auth_token) >= 16 &&
+      length(var.redis_auth_token) <= 128
+    )
+    error_message = "The Redis AUTH token must contain 16 to 128 characters."
+  }
+}
+
+variable "redis_auth_token_version" {
+  description = "Version counter for intentional Redis AUTH token changes."
+  type        = number
+  default     = 1
+
+  validation {
+    condition = (
+      var.redis_auth_token_version >= 1 &&
+      floor(var.redis_auth_token_version) == var.redis_auth_token_version
+    )
+    error_message = "The AUTH token version must be a positive integer."
+  }
+}
+
+variable "redis_snapshot_retention_days" {
+  description = "Number of days to retain automatic Redis snapshots."
+  type        = number
+  default     = 0
+
+  validation {
+    condition = (
+      var.redis_snapshot_retention_days >= 0 &&
+      var.redis_snapshot_retention_days <= 35 &&
+      floor(var.redis_snapshot_retention_days) == var.redis_snapshot_retention_days
+    )
+    error_message = "Snapshot retention must be an integer between 0 and 35."
+  }
+}

@@ -20,14 +20,24 @@ export AWS_CLI_AUTO_PROMPT="off"
 
 unset TF_LOG TF_LOG_PATH
 
-TF_VAR_rds_master_password="$(
+read_ssm_secret() {
   aws ssm get-parameter \
-    --name /flash-ticket/dev/data/MYSQL_MASTER_PASSWORD \
+    --name "$1" \
     --with-decryption \
     --profile flash-ticket-terraform \
     --region us-east-1 \
     --query Parameter.Value \
     --output text
+}
+
+TF_VAR_rds_master_password="$(
+  read_ssm_secret \
+    /flash-ticket/dev/data/MYSQL_MASTER_PASSWORD
+)"
+
+TF_VAR_redis_auth_token="$(
+  read_ssm_secret \
+    /flash-ticket/dev/data/REDIS_AUTH_TOKEN
 )"
 
 if [[ -z "$TF_VAR_rds_master_password" || "$TF_VAR_rds_master_password" == "None" ]]; then
@@ -35,7 +45,13 @@ if [[ -z "$TF_VAR_rds_master_password" || "$TF_VAR_rds_master_password" == "None
   exit 1
 fi
 
+if [[ -z "$TF_VAR_redis_auth_token" || "$TF_VAR_redis_auth_token" == "None" ]]; then
+  printf '%s\n' "Failed to load the Redis AUTH token from SSM." >&2
+  exit 1
+fi
+
 export TF_VAR_rds_master_password
+export TF_VAR_redis_auth_token
 
 exec terraform \
   "-chdir=${TASK_PROJECT_ROOT}/infra/environments/dev" \

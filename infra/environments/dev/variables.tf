@@ -90,3 +90,34 @@ variable "rds_final_snapshot_identifier" {
   type        = string
   default     = null
 }
+
+variable "enable_redis" {
+  description = "Enable Redis resources in the development environment."
+  type        = bool
+  default     = false
+}
+
+variable "redis_node_type" {
+  description = "ElastiCache Redis node type."
+  type        = string
+  default     = "cache.t3.micro"
+}
+
+variable "redis_auth_token" {
+  description = "Ephemeral Redis AUTH token loaded from SSM."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "redis_auth_token_version" {
+  description = "Version counter for intentional Redis AUTH token changes."
+  type        = number
+  default     = 1
+}
+
+variable "redis_snapshot_retention_days" {
+  description = "Automatic Redis snapshot retention."
+  type        = number
+  default     = 0
+}

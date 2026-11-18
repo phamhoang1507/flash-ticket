@@ -9,3 +9,15 @@ output "mysql" {
     engine_version = aws_db_instance.mysql.engine_version_actual
   }
 }
+
+output "redis" {
+  description = "Non-secret Redis connection information."
+
+  value = var.enable_redis ? {
+    replication_group_id = aws_elasticache_replication_group.redis[0].replication_group_id
+    address              = aws_elasticache_replication_group.redis[0].primary_endpoint_address
+    port                 = aws_elasticache_replication_group.redis[0].port
+    engine_version       = aws_elasticache_replication_group.redis[0].engine_version_actual
+    node_type            = aws_elasticache_replication_group.redis[0].node_type
+  } : null
+}

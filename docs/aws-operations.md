@@ -407,6 +407,8 @@ cần được bootstrap khi triển khai ứng dụng.
 
 ## 9. Nghỉ ngắn: stop RDS và giữ dữ liệu
 
+Nếu Redis vẫn tồn tại, stop RDS không ngừng phí Redis. Xem mục 22 để xóa riêng Redis.
+
 Lấy identifier nếu đang ở terminal mới:
 
 ```bash
@@ -933,3 +935,83 @@ aws logout --profile flash-ticket-dev
 Logout không dừng RDS và không xóa tài nguyên AWS.
 
 Đóng terminal cũng không dừng tài nguyên.
+
+## 22. Vận hành ElastiCache Redis
+
+Redis được tạo trong Private Data subnet, sử dụng TLS và AUTH token
+lưu trên SSM.
+
+Cấu hình dev:
+
+```hcl
+enable_redis                  = true
+enable_multi_az_data           = false
+redis_node_type               = "cache.t3.micro"
+redis_auth_token_version      = 1
+redis_snapshot_retention_days = 0
+```
+
+Redis chạy một primary tại AZ đầu tiên.
+
+`enable_multi_az_data` hiện điều khiển cả RDS và Redis. Đọc kỹ plan khi
+thay đổi cờ này.
+
+### Xóa riêng Redis
+
+ElastiCache Redis dạng node không có stop/start như RDS.
+
+Trong `infra/environments/dev/terraform.tfvars`, đổi:
+
+```hcl
+enable_redis = false
+```
+
+Chạy từ root repository:
+
+```bash
+bash scripts/tf-dev.sh plan \
+  -out=dev-redis-off.tfplan
+```
+
+Kiểm tra chỉ các resource Redis bị xóa, sau đó:
+
+```bash
+bash scripts/tf-dev.sh apply \
+  dev-redis-off.tfplan
+```
+
+RDS và SSM secrets được giữ nguyên.
+
+### Tạo lại Redis
+
+Đổi cấu hình:
+
+```hcl
+enable_redis = true
+```
+
+Chạy:
+
+```bash
+bash scripts/tf-dev.sh plan \
+  -out=dev-redis-on.tfplan
+```
+
+```bash
+bash scripts/tf-dev.sh apply \
+  dev-redis-on.tfplan
+```
+
+Redis mới không có dữ liệu cũ.
+
+Phải rebuild inventory projection từ MySQL trước khi bật API.
+Outbox đã publish không tự được Relay xử lý lại để khôi phục cache.
+
+### Chi phí khi nghỉ học
+
+Stop RDS không dừng Redis.
+
+Nếu chỉ stop RDS nhưng giữ `enable_redis = true`, Redis node vẫn tính phí.
+
+Để ngừng phí Redis node, đổi `enable_redis = false` và apply.
+Để xóa cả database và cache, dùng destroy runtime dev.
