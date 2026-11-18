@@ -35,3 +35,8 @@ output "redis" {
   description = "Non-secret Redis connection information."
   value       = module.data_layer.redis
 }
+
+output "mongo_ami_builder" {
+  description = "Temporary MongoDB AMI builder."
+  value       = module.mongo_ami_builder.builder
+}

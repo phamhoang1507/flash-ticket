@@ -77,6 +77,7 @@ flash-ticket/
 ├── infra/
 │   ├── bootstrap/
 │   ├── modules/
+│   │   ├── mongo_ami_builder//
 │   │   ├── vpc/
 │   │   ├── ecr/
 │   │   ├── iam/
@@ -274,10 +275,10 @@ Các phần đã có cấu hình:
 - SES email identity.
 - SSM Standard SecureString secrets.
 - RDS MySQL private, cấu hình Single-AZ cho dev.
+- ElastiCache Redis.
 
 Các phần triển khai tiếp theo:
 
-- ElastiCache Redis.
 - EC2 MongoDB.
 - ECS services.
 - API Gateway, VPC Link và Cloud Map.

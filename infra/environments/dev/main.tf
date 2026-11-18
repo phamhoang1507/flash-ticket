@@ -55,3 +55,17 @@ module "data_layer" {
   redis_auth_token_version      = var.redis_auth_token_version
   redis_snapshot_retention_days = var.redis_snapshot_retention_days
 }
+
+module "mongo_ami_builder" {
+  source = "../../modules/mongo_ami_builder"
+
+  enabled     = var.enable_mongo_ami_builder
+  name_prefix = "flash-ticket-dev"
+
+  vpc_id           = module.vpc.vpc_id
+  public_subnet_id = module.vpc.public_subnet_ids["a"]
+
+  depends_on = [
+    module.vpc,
+  ]
+}

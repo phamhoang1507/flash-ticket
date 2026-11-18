@@ -1015,3 +1015,117 @@ Nếu chỉ stop RDS nhưng giữ `enable_redis = true`, Redis node vẫn tính 
 
 Để ngừng phí Redis node, đổi `enable_redis = false` và apply.
 Để xóa cả database và cache, dùng destroy runtime dev.
+
+## 23. MongoDB AMI builder
+
+MongoDB private EC2 sử dụng AMI được bake trước để không cần NAT Gateway
+hoặc Internet trong Private Data subnet.
+
+AMI chứa MongoDB 8.0 và EC2 Instance Connect package.
+MongoDB service được giữ disabled trong image.
+Tài khoản database được tạo khi bootstrap private node.
+
+### Tạo builder
+
+Trong `infra/environments/dev/terraform.tfvars`:
+
+```hcl
+enable_mongo_ami_builder = true
+```
+
+Chạy từ root repository:
+
+```bash
+terraform -chdir=infra/environments/dev init \
+  -backend-config=backend.hcl
+
+bash scripts/tf-dev.sh plan \
+  -out=mongo-builder-up.tfplan
+
+bash scripts/tf-dev.sh apply \
+  mongo-builder-up.tfplan
+```
+
+Builder tự stop khi build script kết thúc.
+
+### Tạo AMI
+
+```bash
+bash scripts/create-mongo-ami.sh
+```
+
+Script kiểm tra build success marker trước khi tạo image.
+
+Metadata được lưu tại:
+
+```text
+output/mongo-ami.json
+```
+
+### Xóa builder sau khi có AMI
+
+Đổi cấu hình:
+
+```hcl
+enable_mongo_ami_builder = false
+```
+
+Chạy:
+
+```bash
+bash scripts/tf-dev.sh plan \
+  -out=mongo-builder-down.tfplan
+
+bash scripts/tf-dev.sh apply \
+  mongo-builder-down.tfplan
+```
+
+Builder và root volume bị xóa. AMI và snapshot được giữ.
+
+### Chi phí và lifecycle
+
+- Builder running có thể tính phí EC2, public IPv4 và EBS.
+- Builder stopped vẫn giữ EBS volume tính phí.
+- AMI sử dụng EBS snapshot; snapshot giữ lại có phí storage.
+- Terraform destroy không xóa AMI/snapshot tạo bằng script.
+- Giữ AMI cho đến khi không còn cần tạo hoặc khôi phục private MongoDB.
+
+### Tìm lại AMI nếu mất metadata local
+
+```bash
+aws ec2 describe-images \
+  --owners self \
+  --filters \
+    Name=tag:Project,Values=flash-ticket \
+    Name=tag:Role,Values=mongodb-ami \
+  --profile flash-ticket-terraform \
+  --region us-east-1 \
+  --query 'Images[].{ImageId:ImageId,Name:Name,State:State,SnapshotIds:BlockDeviceMappings[].Ebs.SnapshotId}' \
+  --output json
+```
+
+### Xóa AMI và snapshot khi kết thúc lab
+
+Sau khi dọn các EC2 sử dụng AMI:
+
+```bash
+TASK_MONGO_AMI_ID="$(
+  python3 -c 'import json; print(json.load(open("output/mongo-ami.json"))["ImageId"])'
+)"
+
+TASK_MONGO_SNAPSHOT_IDS="$(
+  python3 -c 'import json; print(" ".join(json.load(open("output/mongo-ami.json"))["SnapshotIds"]))'
+)"
+
+aws ec2 deregister-image \
+  --image-id "$TASK_MONGO_AMI_ID" \
+  --profile flash-ticket-terraform \
+  --region us-east-1
+
+for TASK_SNAPSHOT_ID in $TASK_MONGO_SNAPSHOT_IDS; do
+  aws ec2 delete-snapshot \
+    --snapshot-id "$TASK_SNAPSHOT_ID" \
+    --profile flash-ticket-terraform \
+    --region us-east-1
+done
+```

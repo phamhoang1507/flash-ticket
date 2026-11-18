@@ -121,3 +121,9 @@ variable "redis_snapshot_retention_days" {
   type        = number
   default     = 0
 }
+
+variable "enable_mongo_ami_builder" {
+  description = "Create the temporary public EC2 used to build the MongoDB AMI."
+  type        = bool
+  default     = false
+}
