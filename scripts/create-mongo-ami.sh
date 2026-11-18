@@ -46,38 +46,115 @@ printf 'Waiting for builder %s to stop...\n' "$TASK_BUILDER_ID"
 aws_dev ec2 wait instance-stopped \
   --instance-ids "$TASK_BUILDER_ID"
 
-aws_dev ec2 get-console-output \
-  --instance-id "$TASK_BUILDER_ID" \
-  --latest \
-  --output json \
-  | python3 -c '
+python3 - \
+  "$TASK_BUILDER_ID" \
+  "${TASK_PROJECT_ROOT}/output" <<'PY'
 import base64
 import binascii
 import json
+from pathlib import Path
+import subprocess
 import sys
+import time
 
-document = json.load(sys.stdin)
-output = document.get("Output") or ""
+instance_id = sys.argv[1]
+directory = Path(sys.argv[2])
+directory.mkdir(parents=True, exist_ok=True)
 
-try:
-    decoded = base64.b64decode(output, validate=True).decode("utf-8")
-except (binascii.Error, UnicodeDecodeError, ValueError):
-    decoded = ""
+log_path = directory / "mongo-builder-console.log"
+response_path = directory / "mongo-builder-console.json"
 
-if decoded:
-    output = decoded
+log_path.write_text("", encoding="utf-8")
 
-marker = "FLASH_TICKET_MONGO_AMI_BUILD_OK"
+success_marker = "FLASH_TICKET_MONGO_AMI_BUILD_OK"
+failure_marker = "FLASH_TICKET_MONGO_AMI_BUILD_FAILED"
 
-if marker not in output:
-    print("\n".join(output.splitlines()[-80:]), file=sys.stderr)
-    raise SystemExit(
-        "Build success marker is missing. No AMI was created. "
-        "Inspect the build output before retrying."
+last_output = ""
+
+for attempt in range(1, 7):
+    result = subprocess.run(
+        [
+            "aws",
+            "ec2",
+            "get-console-output",
+            "--instance-id",
+            instance_id,
+            "--latest",
+            "--profile",
+            "flash-ticket-terraform",
+            "--region",
+            "us-east-1",
+            "--output",
+            "json",
+            "--no-cli-pager",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
-print("MongoDB AMI build success marker verified.")
-'
+    if result.returncode != 0:
+        raise SystemExit(result.stderr.strip() or "GetConsoleOutput failed.")
+
+    document = json.loads(result.stdout)
+
+    response_path.write_text(
+        json.dumps(document, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    output = document.get("Output") or ""
+
+    if output:
+        try:
+            compact = "".join(output.split())
+            decoded = base64.b64decode(
+                compact,
+                validate=True,
+            ).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            decoded = ""
+
+        if decoded:
+            output = decoded
+
+        last_output = output
+        log_path.write_text(output, encoding="utf-8")
+
+    print(
+        f"Console attempt {attempt}/6: "
+        f"{len(output)} characters received.",
+        flush=True,
+    )
+
+    if failure_marker in output:
+        print(
+            "\n".join(output.splitlines()[-100:]),
+            file=sys.stderr,
+        )
+        raise SystemExit(
+            f"Builder reported a failed installation. Read {log_path}"
+        )
+
+    if success_marker in output:
+        print("MongoDB build success marker verified.", flush=True)
+        break
+
+    if attempt < 6:
+        time.sleep(10)
+else:
+    if last_output:
+        print(
+            "\n".join(last_output.splitlines()[-100:]),
+            file=sys.stderr,
+        )
+
+    raise SystemExit(
+        "Build marker is still missing. No AMI was created. "
+        f"Console log: {log_path}. "
+        f"Raw response: {response_path}."
+    )
+PY
 
 TASK_IMAGE_NAME="flash-ticket-dev-mongo80-${TASK_BUILDER_ID}"
 
@@ -107,8 +184,6 @@ printf 'Waiting for AMI %s...\n' "$TASK_MONGO_AMI_ID"
 
 aws_dev ec2 wait image-available \
   --image-ids "$TASK_MONGO_AMI_ID"
-
-mkdir -p "${TASK_PROJECT_ROOT}/output"
 
 aws_dev ec2 describe-images \
   --image-ids "$TASK_MONGO_AMI_ID" \
