@@ -31,3 +31,16 @@ module "ecr" {
   image_retention_count = 5
   force_delete          = var.ecr_force_delete
 }
+
+module "iam" {
+  source = "../../modules/iam"
+
+  name_prefix    = "flash-ticket-dev"
+  aws_region     = var.aws_region
+  aws_account_id = var.aws_account_id
+
+  ecr_repository_arns = module.ecr.repository_arns
+
+  ssm_parameter_prefix = "/flash-ticket/dev"
+  log_group_prefix     = "/ecs/flash-ticket-dev"
+}
