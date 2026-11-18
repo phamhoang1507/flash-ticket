@@ -72,3 +72,17 @@ module "ses" {
 
   sender_email = var.ses_sender_email
 }
+
+module "task_roles" {
+  source = "../../modules/task_roles"
+
+  name_prefix    = "flash-ticket-dev"
+  aws_region     = var.aws_region
+  aws_account_id = var.aws_account_id
+
+  assets_bucket_arn = module.assets.bucket_arn
+  booking_queue_arn = module.messaging.queue_arn
+
+  ses_identity_arn = module.ses.identity_arn
+  ses_sender_email = module.ses.sender_email
+}

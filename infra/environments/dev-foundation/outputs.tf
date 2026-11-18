@@ -61,3 +61,8 @@ output "ses_sender_email" {
 output "ses_identity_arn" {
   value = module.ses.identity_arn
 }
+
+output "ecs_task_role_arns" {
+  description = "Application IAM roles used by ECS tasks."
+  value       = module.task_roles.task_role_arns
+}
