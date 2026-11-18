@@ -22,3 +22,9 @@ variable "ecr_force_delete" {
   type        = bool
   default     = false
 }
+
+variable "assets_force_destroy" {
+  description = "Allow deletion of all objects in the assets bucket."
+  type        = bool
+  default     = false
+}

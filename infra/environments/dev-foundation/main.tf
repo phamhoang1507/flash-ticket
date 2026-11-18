@@ -44,3 +44,25 @@ module "iam" {
   ssm_parameter_prefix = "/flash-ticket/dev"
   log_group_prefix     = "/ecs/flash-ticket-dev"
 }
+
+module "assets" {
+  source = "../../modules/assets"
+
+  name_prefix    = "flash-ticket-dev"
+  aws_region     = var.aws_region
+  aws_account_id = var.aws_account_id
+
+  force_destroy     = var.assets_force_destroy
+  enable_versioning = false
+
+  demo_banner_path = abspath(
+    "${path.module}/../../../assets/demo-banner.svg"
+  )
+}
+
+module "messaging" {
+  source = "../../modules/messaging"
+
+  name_prefix       = "flash-ticket-dev"
+  max_receive_count = 5
+}
