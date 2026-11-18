@@ -66,3 +66,9 @@ module "messaging" {
   name_prefix       = "flash-ticket-dev"
   max_receive_count = 5
 }
+
+module "ses" {
+  source = "../../modules/ses"
+
+  sender_email = var.ses_sender_email
+}

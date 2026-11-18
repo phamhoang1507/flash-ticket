@@ -28,3 +28,8 @@ variable "assets_force_destroy" {
   type        = bool
   default     = false
 }
+
+variable "ses_sender_email" {
+  description = "Verified email used for development ticket delivery."
+  type        = string
+}

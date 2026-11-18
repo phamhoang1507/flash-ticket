@@ -53,3 +53,11 @@ output "booking_dlq_url" {
 output "booking_dlq_arn" {
   value = module.messaging.dlq_arn
 }
+
+output "ses_sender_email" {
+  value = module.ses.sender_email
+}
+
+output "ses_identity_arn" {
+  value = module.ses.identity_arn
+}
