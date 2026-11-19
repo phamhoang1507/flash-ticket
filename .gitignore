@@ -18,3 +18,10 @@ output/
 *.tfplan
 crash.log
 backend.hcl
+
+# AWS dev deployment: local configuration and generated files
+.terraform/
+*.tfvars.json
+!*.tfvars.example
+!.env.*.example
+frontend/dist/

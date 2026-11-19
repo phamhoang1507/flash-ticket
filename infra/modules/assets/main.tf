@@ -58,26 +58,30 @@ resource "aws_s3_bucket_policy" "require_https" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-
-    Statement = [
-      {
+    Statement = concat(
+      [{
         Sid       = "DenyInsecureTransport"
         Effect    = "Deny"
         Principal = "*"
         Action    = "s3:*"
-
-        Resource = [
-          aws_s3_bucket.this.arn,
-          "${aws_s3_bucket.this.arn}/*"
-        ]
-
+        Resource  = [aws_s3_bucket.this.arn, "${aws_s3_bucket.this.arn}/*"]
         Condition = {
-          Bool = {
-            "aws:SecureTransport" = "false"
+          Bool = { "aws:SecureTransport" = "false" }
+        }
+      }],
+      var.cloudfront_distribution_arn == null ? [] : [{
+        Sid       = "AllowCloudFrontBanners"
+        Effect    = "Allow"
+        Principal = { Service = "cloudfront.amazonaws.com" }
+        Action    = "s3:GetObject"
+        Resource  = ["${aws_s3_bucket.this.arn}/banners/*"]
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = var.cloudfront_distribution_arn
           }
         }
-      }
-    ]
+      }]
+    )
   })
 }
 

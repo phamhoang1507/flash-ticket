@@ -17,6 +17,13 @@ RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home app \
     && mkdir -p /app/keys
 
+RUN mkdir -p /app/certs \
+    && chmod 0755 /app /app/certs
+
+ADD --chmod=0444 \
+    https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+    /app/certs/global-bundle.pem
+
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv

@@ -52,6 +52,8 @@ module "assets" {
   aws_region     = var.aws_region
   aws_account_id = var.aws_account_id
 
+  cloudfront_distribution_arn = module.web_auth.distribution_arn
+
   force_destroy     = var.assets_force_destroy
   enable_versioning = false
 

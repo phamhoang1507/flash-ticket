@@ -145,3 +145,8 @@ variable "mongodb_instance_type" {
   type        = string
   default     = "t3.micro"
 }
+variable "enable_data_layer" {
+  description = "Create database resources after the MongoDB AMI is ready."
+  type        = bool
+  default     = false
+}

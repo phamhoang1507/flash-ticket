@@ -1,5 +1,16 @@
 # Flash-Ticket
 
+Hướng dẫn triển khai dev hiện tại: **[AWS dev deployment quickstart](docs/DEPLOY-DEV-QUICKSTART.md)**. Bản này bổ sung ECS, API Gateway/VPC Link/Cloud Map, Cognito và CloudFront để test toàn bộ luồng.
+
+```bash
+python3 scripts/deploy_dev.py status
+python3 scripts/deploy_dev.py stop
+python3 scripts/deploy_dev.py destroy
+```
+
+`stop` chỉ dừng app; database vẫn tính phí. `destroy` xóa runtime và dữ liệu dev. Đọc quickstart trước khi tạo hoặc xóa tài nguyên. Các phần phía dưới ghi lại các bước đã xây dựng trước đó.
+
+
 Hệ thống đặt vé sự kiện phục vụ việc học Microservices, AWS, Docker,
 Terraform và CI/CD.
 

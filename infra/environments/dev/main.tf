@@ -23,6 +23,7 @@ module "vpc" {
 }
 
 module "data_layer" {
+  count = var.enable_data_layer ? 1 : 0
   source = "../../modules/data_layer"
 
   name_prefix = "flash-ticket-dev"
@@ -79,4 +80,9 @@ module "mongo_ami_builder" {
   depends_on = [
     module.vpc,
   ]
+}
+
+moved {
+  from = module.data_layer
+  to   = module.data_layer[0]
 }

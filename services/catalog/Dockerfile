@@ -23,7 +23,7 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app shared ./shared
 COPY --chown=app:app services/catalog/app ./app
-COPY --chown=app:app scripts/__init__.py scripts/seed_catalog.py ./scripts/
+COPY --chown=app:app scripts/__init__.py scripts/seed_catalog.py scripts/seed_aws_catalog.py ./scripts/
 COPY --chown=app:app assets/demo-banner.svg ./assets/demo-banner.svg
 
 RUN chmod -R a+rX /app

@@ -28,12 +28,12 @@ output "security_group_ids" {
 
 output "rds" {
   description = "Non-secret connection information for development MySQL."
-  value       = module.data_layer.mysql
+  value       = try(module.data_layer[0].mysql, null)
 }
 
 output "redis" {
   description = "Non-secret Redis connection information."
-  value       = module.data_layer.redis
+  value       = try(module.data_layer[0].redis, null)
 }
 
 output "mongo_ami_builder" {
@@ -43,5 +43,5 @@ output "mongo_ami_builder" {
 
 output "mongodb" {
   description = "Private MongoDB instance and management endpoint."
-  value       = module.data_layer.mongodb
+  value       = try(module.data_layer[0].mongodb, null)
 }

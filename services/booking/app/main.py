@@ -12,31 +12,16 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
 from shared.auth import Principal, get_verifier, require_scope
 from shared.aws import aws_client
+from shared.database import create_db_engine
 
 logger = logging.getLogger(__name__)
 
-engine = create_engine(
-    os.environ["DATABASE_URL"],
-    isolation_level="READ COMMITTED",
-    pool_size=5,
-    max_overflow=0,
-    pool_timeout=3,
-    pool_recycle=900,
-    pool_pre_ping=True,
-    connect_args={
-        "connect_timeout": 3,
-        "read_timeout": 10,
-        "write_timeout": 10,
-        "init_command": (
-            "SET time_zone = '+00:00', innodb_lock_wait_timeout = 3"
-        ),
-    },
-)
+engine = create_db_engine(pool_size=5)
 
 
 @asynccontextmanager

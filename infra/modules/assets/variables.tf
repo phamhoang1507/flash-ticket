@@ -31,3 +31,8 @@ variable "demo_banner_path" {
     error_message = "The demo banner file does not exist."
   }
 }
+variable "cloudfront_distribution_arn" {
+  description = "CloudFront distribution permitted to read banners through OAC."
+  type        = string
+  default     = null
+}
