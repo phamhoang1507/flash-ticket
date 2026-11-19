@@ -68,3 +68,72 @@ docker rm --force flash-ticket-mongo-bootstrap-test
 5. Lưu Catalog connection string vào SSM.
 
 AWS hiện chưa cần được tạo lại để chạy bài kiểm tra Local này.
+
+## AWS provisioning wrapper
+
+Script:
+
+```text
+scripts/provision_mongodb.py
+```
+
+### Kiểm tra khi AWS đang được destroy
+
+```bash
+python3 scripts/provision_mongodb.py --check-only
+
+python3 tests/test_mongodb_provisioner.py -v
+```
+
+Các kiểm tra này không gọi AWS APIs.
+
+### Chạy thật sau khi khôi phục hạ tầng
+
+Chỉ thực hiện khi đã có:
+
+- Terraform backend và runtime state.
+- Private MongoDB EC2 đang chạy.
+- EC2 Instance Connect Endpoint hoạt động.
+- MongoDB service active.
+- Hai SecureString parameters:
+  - `/flash-ticket/dev/data/MONGODB_ROOT_PASSWORD`
+  - `/flash-ticket/dev/data/MONGODB_APP_PASSWORD`
+
+Lệnh:
+
+```bash
+python3 scripts/provision_mongodb.py --execute
+```
+
+Script không tự apply Terraform hoặc tạo EC2.
+
+Nó đọc secrets từ SSM, bootstrap MongoDB qua SSH rồi ghi URI vào:
+
+```text
+/flash-ticket/dev/catalog/MONGODB_URI
+```
+
+URI được lưu dưới dạng Standard SecureString.
+
+Script không in URI hoặc passwords.
+
+### Hành vi khi chạy lại
+
+- Credentials đúng, users tồn tại: kiểm tra lại.
+- Credentials không khớp: dừng, không tự đổi mật khẩu.
+- Bootstrap thất bại: không publish URI.
+- URI không đổi: không tạo SSM version mới.
+- Node mới có hostname khác: cập nhật URI sau bootstrap thành công.
+
+SSM parameter name không tự trở thành environment variable của ứng dụng.
+ECS Task Definition sẽ map parameter này vào cấu hình mà Catalog sử dụng.
+
+Khi secret đã inject vào ECS container thay đổi trên SSM, cần triển khai
+task mới để container nhận giá trị mới.
+
+### Cleanup
+
+Parameter nằm trong prefix `/flash-ticket/dev/`, nên được xóa bởi
+bước SSM cleanup của runbook.
+
+Các kiểm tra offline không tạo tài nguyên AWS cần destroy.
