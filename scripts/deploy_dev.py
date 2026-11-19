@@ -75,12 +75,23 @@ def run(command: list[str], *, data: str | None = None,
 def aws(*arguments: str, payload: dict | None = None,
         allow_failure: bool = False) -> dict | list | str | None:
     command = ["aws", "--profile", PROFILE, "--region", REGION,
-               "--no-cli-pager", *arguments]
-    if payload is not None:
-        command.extend(["--cli-input-json", "file:///dev/stdin"])
-    command.extend(["--output", "json"])
-    result = run(command, data=json.dumps(payload) if payload is not None else None,
-                 capture=True, check=not allow_failure)
+               "--no-cli-pager", *arguments, "--output", "json"]
+    try:
+        if payload is None:
+            result = run(command, capture=True, check=not allow_failure)
+        else:
+            with tempfile.TemporaryDirectory(prefix="flash-ticket-aws-request-") as directory:
+                request_file = Path(directory) / "request.json"
+                descriptor = os.open(request_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    json.dump(payload, stream, ensure_ascii=True, allow_nan=False)
+                result = run(
+                    [*command, "--cli-input-json", request_file.as_uri()],
+                    capture=True, check=not allow_failure,
+                )
+    except DeployError as error:
+        operation = " ".join(arguments[:2])
+        raise DeployError(f"AWS {operation}: {error}") from None
     if result.returncode:
         return None
     return json.loads(result.stdout) if result.stdout.strip() else {}

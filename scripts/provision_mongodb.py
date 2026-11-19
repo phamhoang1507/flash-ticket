@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from urllib.parse import quote, urlencode
 
 
@@ -98,19 +99,19 @@ class Runner:
             "--no-cli-pager",
         ]
 
-        input_text = None
-
-        if request is not None:
-            command.extend([
-                "--cli-input-json",
-                "file:///dev/stdin",
-            ])
-            input_text = json.dumps(request)
-
-        output = self.command(
-            command,
-            input_text=input_text,
-        )
+        if request is None:
+            output = self.command(command)
+        else:
+            with tempfile.TemporaryDirectory(prefix="flash-ticket-mongodb-request-") as directory:
+                request_file = Path(directory) / "request.json"
+                descriptor = os.open(
+                    request_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                )
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    json.dump(request, stream, ensure_ascii=True, allow_nan=False)
+                output = self.command([
+                    *command, "--cli-input-json", request_file.as_uri(),
+                ])
 
         return json.loads(output) if output.strip() else {}
 

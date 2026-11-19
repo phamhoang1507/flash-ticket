@@ -274,6 +274,24 @@ Các script seed được thiết kế để không reset inventory đã đặt.
 
 Nếu task lỗi, stage dừng trước tác vụ tiếp theo. Xem ECS task stopped reason và CloudWatch Logs; không bật service bằng cách đổi `desired_count` thủ công khi bootstrap chưa xong.
 
+### AWS CLI báo Invalid JSON khi dùng cli-input-json
+
+Lỗi `ParamValidation: Error parsing parameter 'cli-input-json': Invalid JSON received` sau Terraform apply nằm ở AWS CLI request, không phải cú pháp Terraform. Các script dùng file JSON tạm có quyền `0600` trong thư mục tạm `0700`, giữ file đến khi lệnh AWS kết thúc rồi tự xóa. Không truyền secret JSON bằng command-line argument hoặc `/dev/stdin`.
+
+Lấy bản sửa của branch hiện tại:
+
+```bash
+git pull --ff-only origin feat/aws-dev-deploy
+```
+
+Chạy lại đúng stage đã lỗi. Nếu đang ở `bootstrap`, giữ image tag đã publish trong `launch.auto.tfvars` và chạy:
+
+```bash
+python3 scripts/deploy_dev.py bootstrap
+```
+
+Không cần chạy lại `images` khi chỉ cập nhật các script triển khai. Terraform apply trước lỗi có thể đã tạo runtime; chạy lại stage sẽ đọc state đang có. Nếu bootstrap đã thành công và app đang chạy, dừng service theo mục 8 trước khi khởi tạo lại.
+
 ## 7. Bật API rồi publish React frontend
 
 ```bash
