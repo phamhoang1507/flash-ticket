@@ -88,6 +88,13 @@ apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl gnupg jq ec2-instance-connect openssh-server
 
+# /run is recreated at boot. Make sshd validation safe before ssh.service starts.
+cat > /etc/tmpfiles.d/flash-ticket-sshd.conf <<'SSHD_RUNTIME'
+d /run/sshd 0755 root root -
+SSHD_RUNTIME
+chmod 0644 /etc/tmpfiles.d/flash-ticket-sshd.conf
+install -d -o root -g root -m 0755 /run/sshd
+
 curl --fail --show-error --silent --location --retry 5 \
   https://pgp.mongodb.com/server-8.0.asc \
   | gpg --dearmor --yes --output /usr/share/keyrings/mongodb-server-8.0.gpg

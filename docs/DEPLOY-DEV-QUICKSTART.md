@@ -292,6 +292,28 @@ python3 scripts/deploy_dev.py bootstrap
 
 Không cần chạy lại `images` khi chỉ cập nhật các script triển khai. Terraform apply trước lỗi có thể đã tạo runtime; chạy lại stage sẽ đọc state đang có. Nếu bootstrap đã thành công và app đang chạy, dừng service theo mục 8 trước khi khởi tạo lại.
 
+### MongoDB bootstrap dừng vì thiếu /run/sshd
+
+Dấu hiệu: cloud-init báo lỗi module `scripts_user`, MongoDB inactive và log có `Missing privilege separation directory: /run/sshd`. Thư mục `/run` là runtime filesystem, không giữ lại qua lần boot từ AMI. User data dừng tại `sshd -t` trước khi bật MongoDB.
+
+Bản sửa AMI builder tạo persistent tmpfiles rule cho các AMI bake sau này. Với instance hiện tại, chạy recovery từ root repo:
+
+```bash
+git pull --ff-only origin feat/aws-dev-deploy
+python3 scripts/repair_mongodb_bootstrap.py
+```
+
+Recovery tạo thư mục SSH runtime, sao lưu metadata cloud-init vào thư mục root-only, xác minh chỉ module scripts_user bị lỗi, rồi khởi chạy lại đúng module đó. Cloud-init ghi lại kết quả chạy thực tế; script yêu cầu cloud-init và mongod đều khỏe trước khi báo thành công. Không cần bake lại AMI hoặc thay thế instance hiện tại.
+
+Sau khi recovery thành công:
+
+```bash
+python3 scripts/provision_mongodb.py --execute
+python3 scripts/deploy_dev.py bootstrap
+```
+
+Giữ nguyên image tag đã push. Bản sửa này không đổi private node user data, nên không yêu cầu Terraform thay thế MongoDB vì thay đổi template đó.
+
 ## 7. Bật API rồi publish React frontend
 
 ```bash
