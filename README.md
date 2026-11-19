@@ -344,3 +344,5 @@ Chỉnh sửa tài liệu không yêu cầu build lại image.
 AWS Budget gửi cảnh báo; Budget hiện tại không tự động tắt tài nguyên.
 
 - [MongoDB user bootstrap và Local checks](docs/mongodb-bootstrap.md)
+
+- [MySQL bootstrap image và migration policy](docs/mysql-bootstrap.md)
