@@ -342,3 +342,5 @@ Chỉnh sửa tài liệu không yêu cầu build lại image.
 | Xóa repository trên máy | Không xóa tài nguyên AWS |
 
 AWS Budget gửi cảnh báo; Budget hiện tại không tự động tắt tài nguyên.
+
+- [MongoDB user bootstrap và Local checks](docs/mongodb-bootstrap.md)
