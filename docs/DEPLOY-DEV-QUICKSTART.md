@@ -147,6 +147,25 @@ Không xóa `.secrets/aws-dev-secrets.json` khi dọn AWS: file này giúp khôi
 python3 scripts/deploy_dev.py images
 ```
 
+Nếu `images` báo thiếu `ecr_repository_urls` hoặc các foundation outputs khác, Terraform state mà script đang đọc chưa có đủ output. Source đã khai báo các output này; kiểm tra state trước khi sửa Terraform hoặc tạo ECR thủ công:
+
+```bash
+terraform -chdir=infra/environments/dev-foundation workspace show
+
+terraform -chdir=infra/environments/dev-foundation output -json \\
+  | python3 -c 'import json,sys; print("\\n".join(sorted(json.load(sys.stdin))))'
+```
+
+Hoàn tất hoặc chạy lại `prepare` với cùng SES sender đã cấu hình, đọc Terraform plan rồi mới chạy `images`:
+
+```bash
+read -r -p "SES sender email: " TASK_SES_SENDER
+python3 scripts/deploy_dev.py prepare --sender "$TASK_SES_SENDER"
+python3 scripts/deploy_dev.py images
+```
+
+Nếu `prepare` đã thành công mà output vẫn thiếu, kiểm tra `infra/environments/dev-foundation/backend.hcl` và Terraform workspace đang chọn; script cần đọc đúng state foundation đó. Stage `images` chỉ kiểm tra rồi dừng khi thiếu output, không tự apply foundation.
+
 Build/push lúc này chỉ cần foundation. Làm trước khi tạo RDS/Redis để database không phải chạy chờ bạn tải dependency và build Docker. Chi tiết tag/build nằm ở mục 5.
 
 ```bash

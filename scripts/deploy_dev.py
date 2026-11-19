@@ -173,6 +173,19 @@ def require_outputs(*names: str) -> dict:
     return values
 
 
+def require_foundation_outputs(*names: str) -> dict:
+    values = outputs(FOUNDATION)
+    missing = [name for name in names if not values.get(name)]
+    if missing:
+        raise DeployError(
+            "Foundation state is missing required outputs: " + ", ".join(missing) + ". "
+            "Run the prepare stage with your SES sender and wait for it to finish before images. "
+            "If prepare already succeeded, inspect infra/environments/dev-foundation/backend.hcl "
+            "and the selected Terraform workspace; images must read that same foundation state."
+        )
+    return values
+
+
 def get_secret(name: str) -> str:
     value = aws("ssm", "get-parameter", "--name", f"{PREFIX}/{name}",
                 "--with-decryption")["Parameter"]["Value"]
@@ -319,13 +332,15 @@ def data_stage(args: argparse.Namespace) -> None:
 
 
 def images(args: argparse.Namespace) -> None:
+    foundation = require_foundation_outputs(
+        "ecr_repository_urls", "mysql_bootstrap_repository_url", "ecr_registry_url"
+    )
     identity()
     dirty = run(["git", "status", "--porcelain", "--untracked-files=normal"], capture=True).stdout
     if dirty.strip():
         raise DeployError("Commit project source before images. The build tag must identify a clean Git commit.")
     sha = run(["git", "rev-parse", "--short=12", "HEAD"], capture=True).stdout.strip()
     tag = f"dev-1.0.0-{sha}"
-    foundation = outputs(FOUNDATION)
     repositories = dict(foundation["ecr_repository_urls"])
     repositories["mysql_bootstrap"] = foundation["mysql_bootstrap_repository_url"]
     registry = foundation["ecr_registry_url"]
