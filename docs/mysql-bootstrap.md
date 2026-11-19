@@ -76,3 +76,56 @@ Bootstrap task chạy xong phải thoát.
 
 Các container kiểm tra dùng `--rm`, không tạo tài nguyên AWS.
 Image Local giữ lại chỉ sử dụng ổ đĩa máy phát triển.
+
+## Local integration test với MySQL 8.4 và TLS
+
+Script:
+
+```text
+scripts/test_mysql_bootstrap_integration.py
+```
+
+Yêu cầu Docker, Python 3 và OpenSSL.
+
+Chọn đúng bootstrap image có tag commit:
+
+```bash
+read -r -p "Bootstrap image: " TASK_MYSQL_BOOTSTRAP_IMAGE
+
+python3 scripts/test_mysql_bootstrap_integration.py \
+  --image "$TASK_MYSQL_BOOTSTRAP_IMAGE"
+```
+
+Test sử dụng:
+
+- MySQL 8.4 container riêng.
+- Docker internal network, không publish port.
+- CA và server certificate tạm.
+- Hostname verification với SAN `mysql`.
+- Credentials ngẫu nhiên chỉ dành cho test.
+- tmpfs cho MySQL data directory.
+
+Các kiểm tra:
+
+1. TLS connection với certificate hợp lệ.
+2. Bootstrap schema và app user lần đầu.
+3. Chạy lại không chạy migration hoặc seed.
+4. Sai app password bị từ chối.
+5. Sai admin password bị từ chối.
+6. Certificate hostname mismatch bị từ chối.
+7. Credentials ban đầu vẫn hoạt động.
+8. App user có DML trên business tables, không có DDL hoặc quyền đọc ledger/system users.
+
+Script không gọi AWS APIs hoặc sử dụng database volumes của dự án.
+
+### Cleanup khi bị gián đoạn
+
+```bash
+docker ps -aq \
+  --filter "label=com.flash-ticket.test=mysql-bootstrap" \
+  | xargs -r docker rm --force --volumes
+
+docker network ls -q \
+  --filter "label=com.flash-ticket.test=mysql-bootstrap" \
+  | xargs -r docker network rm
+```
