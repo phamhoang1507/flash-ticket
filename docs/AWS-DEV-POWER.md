@@ -140,6 +140,21 @@ Lệnh không xóa Docker Hub images, Git repository, Docker images/volumes loca
 
 Nếu lệnh cleanup báo lỗi, không coi đó là đã xóa hết. Đọc lỗi, xử lý nguyên nhân và chạy lại cùng mode; giữ Terraform state để tiếp tục quản lý những tài nguyên còn lại.
 
+### Cleanup dừng vì CloudFront hoặc resource không liên quan
+
+Nếu thấy thông báo cleanup preparation bị chặn tại CloudFront, runtime có thể đã được xóa nhưng foundation chưa được dọn hết. Bước chuẩn bị phải lưu `force_destroy`/`force_delete` vào Terraform state trước khi xóa các bucket/repository đang có dữ liệu.
+
+Script mới chỉ tạo targeted plan cho đúng các S3 bucket/ECR repository còn trong state, tắt refresh riêng bước này, rồi kiểm tra plan chỉ đổi cờ xóa. Nó từ chối mọi create/delete/replacement, thay đổi CloudFront, thay đổi field khác và giá trị chưa xác định. Bước Terraform destroy phía sau vẫn dùng dependency graph đầy đủ.
+
+Lấy bản sửa rồi tiếp tục cleanup:
+
+```bash
+git pull --ff-only origin feat/aws-dev-deploy
+bash scripts/aws-dev-down.sh all
+```
+
+Không chạy `up` để sửa lỗi cleanup. Nếu phần runtime đã xóa xong, script bỏ qua state runtime trống và tiếp tục các phần còn lại. Giữ local bootstrap state và backend cho đến khi toàn bộ cleanup hoàn tất.
+
 ## 6. Xác nhận tự động bằng `--yes`
 
 Mặc định, các thao tác Terraform cần xác nhận vẫn hiển thị cho bạn xem. Sau khi hiểu rõ mode và dữ liệu sẽ bị xóa, có thể dùng:
@@ -273,3 +288,4 @@ bash scripts/aws-dev-down.sh all
 ```
 
 Lần sau dựng lại bằng `up --sender "$TASK_SES_SENDER"` hoặc nhập lại sender như mục 3. Không cần tạo project mới hoặc viết lại Terraform.
+

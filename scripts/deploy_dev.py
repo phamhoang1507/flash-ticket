@@ -602,25 +602,106 @@ def destroy_root(root: Path, args: argparse.Namespace, *, runtime: bool = False)
     terraform(root, *options, runtime=runtime)
 
 
+def cleanup_targets(root: Path, addresses: list[str]) -> dict[str, str]:
+    """Select existing buckets/repositories whose deletion flags need to enter state."""
+    if root == FOUNDATION:
+        known = {
+            'module.assets.aws_s3_bucket.this': 'aws_s3_bucket',
+            'module.web_auth.aws_s3_bucket.frontend': 'aws_s3_bucket',
+            'module.bootstrap_ecr.aws_ecr_repository.this["mysql-bootstrap"]': 'aws_ecr_repository',
+        }
+        known.update({
+            f'module.ecr.aws_ecr_repository.this["{service}"]': 'aws_ecr_repository'
+            for service in ("booking", "catalog", "relay", "worker")
+        })
+    elif root == BOOTSTRAP:
+        known = {'aws_s3_bucket.terraform_state': 'aws_s3_bucket'}
+    else:
+        raise DeployError("Cleanup flag preparation is only supported for foundation and bootstrap.")
+    tracked = set(addresses)
+    return {address: resource_type for address, resource_type in known.items() if address in tracked}
+
+
+def cleanup_has_unknown(value: object) -> bool:
+    if isinstance(value, dict):
+        return any(cleanup_has_unknown(item) for item in value.values())
+    if isinstance(value, list):
+        return any(cleanup_has_unknown(item) for item in value)
+    return value is True
+
+
+def validate_cleanup_plan(document: dict, targets: dict[str, str]) -> None:
+    """Reject every operation except a known resource's single deletion flag update."""
+    changes = document.get("resource_changes")
+    if not isinstance(changes, list):
+        raise DeployError("Cleanup plan has an invalid resource_changes structure.")
+    flags_by_type = {"aws_s3_bucket": "force_destroy", "aws_ecr_repository": "force_delete"}
+    seen = set()
+    for resource in changes:
+        if not isinstance(resource, dict) or not isinstance(resource.get("change"), dict):
+            raise DeployError("Cleanup plan contains an invalid resource change.")
+        change = resource["change"]
+        actions = change.get("actions")
+        address = resource.get("address", "<unknown>")
+        if actions == ["no-op"] and address not in targets:
+            continue
+        if actions == ["read"] and resource.get("mode") == "data":
+            continue
+        resource_type = resource.get("type")
+        flag = flags_by_type.get(resource_type)
+        before, after = change.get("before"), change.get("after")
+        if (
+            actions not in (["update"], ["no-op"])
+            or resource.get("mode") != "managed"
+            or targets.get(address) != resource_type
+            or flag is None
+            or not isinstance(before, dict)
+            or not isinstance(after, dict)
+        ):
+            raise DeployError(
+                f"Cleanup preparation rejected an unrelated or destructive change at {address}. "
+                "Only tracked bucket/repository deletion flags may be updated; no apply ran."
+            )
+        if (
+            "after_unknown" not in change
+            or after.get(flag) is not True
+            or cleanup_has_unknown(change["after_unknown"])
+        ):
+            raise DeployError(
+                f"Cleanup preparation requires a known {flag}=true at {address}; no apply ran."
+            )
+        before_other = {key: value for key, value in before.items() if key != flag}
+        after_other = {key: value for key, value in after.items() if key != flag}
+        if before_other != after_other:
+            raise DeployError(
+                f"Cleanup preparation would change fields other than {flag} at {address}; no apply ran."
+            )
+        if actions == ["no-op"] and before != after:
+            raise DeployError(f"Cleanup plan has an inconsistent no-op at {address}; no apply ran.")
+        seen.add(address)
+    missing = sorted(set(targets) - seen)
+    if missing:
+        raise DeployError(
+            "Cleanup plan did not confirm deletion flags for: " + ", ".join(missing) + "; no apply ran."
+        )
+
+
 def adopt_cleanup_flags(root: Path, args: argparse.Namespace) -> None:
-    """Store deletion settings in state without accidentally rebuilding destroyed objects."""
-    if not state_addresses(root):
+    """Adopt only deletion flags without planning unrelated infrastructure updates."""
+    targets = cleanup_targets(root, state_addresses(root))
+    if not targets:
         return
     plan = root / "cleanup.tfplan"
     try:
-        terraform(root, "plan", f"-out={plan.name}")
+        # This exceptional targeted plan only persists provider deletion settings.
+        # Ordinary destruction follows separately and still uses Terraform's full graph.
+        terraform(
+            root, "plan", "-refresh=false",
+            *(f"-target={address}" for address in sorted(targets)),
+            f"-out={plan.name}",
+        )
         described = run(["terraform", f"-chdir={root}", "show", "-json", plan.name], capture=True)
-        document = json.loads(described.stdout)
-        changes = document.get("resource_changes", [])
-        for change in changes:
-            actions = change["change"]["actions"]
-            if actions in (["no-op"], ["read"]):
-                continue
-            if actions != ["update"] or change["type"] not in {"aws_s3_bucket", "aws_ecr_repository"}:
-                raise DeployError(
-                    "Cleanup preparation would create/delete or change unrelated resources at "
-                    f"{change['address']}. No apply ran. Review the displayed plan; "
-                    "do not recreate infrastructure merely to destroy it.")
+        validate_cleanup_plan(json.loads(described.stdout), targets)
         terraform(root, "apply", plan.name)
     finally:
         plan.unlink(missing_ok=True)
@@ -691,3 +772,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Interrupted. Existing AWS resources remain; inspect status before retrying.", file=sys.stderr)
         raise SystemExit(130)
+
