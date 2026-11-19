@@ -34,6 +34,20 @@ CATALOG_URI_PARAMETER = (
 
 REMOTE_SCRIPT = "/usr/local/lib/flash-ticket/bootstrap-mongodb.js"
 
+READINESS_COMMAND = r"""set -u
+cloud_init_result=0
+sudo -n cloud-init status --wait --long || cloud_init_result=$?
+mongodb_result=0
+sudo -n systemctl is-active mongod || mongodb_result=$?
+if [ "$cloud_init_result" -ne 0 ] || [ "$mongodb_result" -ne 0 ]; then
+  printf 'READINESS_FAILED cloud_init_exit=%s mongod_exit=%s\n' "$cloud_init_result" "$mongodb_result"
+  sudo -n systemctl status mongod --no-pager --full || true
+  sudo -n journalctl -u mongod -n 60 --no-pager || true
+  sudo -n tail -n 80 /var/log/flash-ticket-mongodb-node.log || true
+  exit 1
+fi
+"""
+
 
 class ProvisionError(RuntimeError):
     pass
@@ -81,11 +95,14 @@ class Runner:
             ) from None
 
         if result.returncode != 0:
-            details = result.stderr or result.stdout
-            raise ProvisionError(
-                self.redact(details.strip())
-                or f"Command failed: {arguments[0]}"
-            )
+            details = [
+                f"Command failed: {Path(arguments[0]).name} (exit_code={result.returncode})"
+            ]
+            if result.stdout and result.stdout.strip():
+                details.append("stdout:\n" + result.stdout.strip())
+            if result.stderr and result.stderr.strip():
+                details.append("stderr:\n" + result.stderr.strip())
+            raise ProvisionError(self.redact("\n".join(details)))
 
         return result.stdout
 
@@ -197,15 +214,10 @@ def load_passwords(runner):
 
 
 def bootstrap_remote(runner, payload):
-    runner.command([
-        "bash",
-        str(SSH_SCRIPT),
-        (
-            "sudo -n cloud-init status --wait >/dev/null"
-            " && sudo -n systemctl is-active --quiet mongod"
-        ),
-    ])
+    print("MongoDB stage: instance readiness", flush=True)
+    runner.command(["bash", str(SSH_SCRIPT), READINESS_COMMAND])
 
+    print("MongoDB stage: upload bootstrap script", flush=True)
     runner.command(
         [
             "bash",
@@ -221,6 +233,7 @@ def bootstrap_remote(runner, payload):
         ),
     )
 
+    print("MongoDB stage: provision database users", flush=True)
     output = runner.command(
         [
             "bash",
