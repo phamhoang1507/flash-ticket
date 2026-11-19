@@ -1,5 +1,15 @@
 # Flash-Ticket
 
+Bật/tắt AWS dev bằng hai script: **[Hướng dẫn AWS dev up/down](docs/AWS-DEV-POWER.md)**.
+
+```bash
+bash scripts/aws-dev-up.sh
+bash scripts/aws-dev-down.sh all
+```
+
+`all` xóa tài nguyên và dữ liệu dev của dự án. Dùng `stop` để chỉ dừng ECS và giữ database; các tài nguyên còn lại vẫn có thể tính phí.
+
+
 Hướng dẫn triển khai dev hiện tại: **[AWS dev deployment quickstart](docs/DEPLOY-DEV-QUICKSTART.md)**. Bản này bổ sung ECS, API Gateway/VPC Link/Cloud Map, Cognito và CloudFront để test toàn bộ luồng.
 
 ```bash
@@ -357,3 +367,4 @@ AWS Budget gửi cảnh báo; Budget hiện tại không tự động tắt tài
 - [MongoDB user bootstrap và Local checks](docs/mongodb-bootstrap.md)
 
 - [MySQL bootstrap image và migration policy](docs/mysql-bootstrap.md)
+

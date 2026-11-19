@@ -1,5 +1,8 @@
 # Flash-Ticket: đưa bản dev lên AWS để test toàn bộ luồng
 
+Để bật/tắt bằng hai file thay vì gọi từng stage, dùng **[AWS dev up/down](AWS-DEV-POWER.md)**. Các stage bên dưới vẫn dùng để debug từng bước.
+
+
 Hướng dẫn này dành cho trường hợp **đã xóa tài nguyên AWS, còn nguyên source code trên máy**. Chạy các lệnh trong WSL tại thư mục `flash-ticket`. Region sử dụng là `us-east-1`; IAM profile là `flash-ticket-terraform`.
 
 Mục tiêu của lượt triển khai này: mở CloudFront URL, đăng ký/đăng nhập qua Cognito, xem sự kiện, đặt vé và nhận PDF qua email. Chưa chuyển sang Phase 4 CI/CD hay Phase 5 load testing.
@@ -446,3 +449,4 @@ Credit của tài khoản mới thanh toán usage; không mặc định mọi d�
 - Bản dev một node không dùng để chứng minh chịu tải 50.000 người. Kiểm chứng tải, connection budget, autoscaling và HA sẽ làm có kiểm soát ở Phase 5.
 
 Đường dẫn tài liệu vận hành cũ: [AWS operations](aws-operations.md). Khi thông tin bootstrap/runtime cũ khác với bản triển khai này, dùng luồng stage trong tài liệu hiện tại cho lần triển khai mới.
+
