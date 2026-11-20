@@ -1,6 +1,11 @@
+import ast
 import importlib.util
+import json
 from pathlib import Path
+import re
+import stat
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -16,6 +21,18 @@ spec = importlib.util.spec_from_file_location(
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
+
+recovery_spec = importlib.util.spec_from_file_location(
+    "mongodb_repair", PROJECT_ROOT / "scripts" / "repair_mongodb_bootstrap.py"
+)
+recovery_module = importlib.util.module_from_spec(recovery_spec)
+recovery_spec.loader.exec_module(recovery_module)
+
+bake_spec = importlib.util.spec_from_file_location(
+    "mongodb_bake", PROJECT_ROOT / "scripts" / "bake_mongo_ami.py"
+)
+bake_module = importlib.util.module_from_spec(bake_spec)
+bake_spec.loader.exec_module(bake_module)
 
 
 class OfflineRunner(module.Runner):
@@ -138,6 +155,108 @@ class MongoProvisionerTests(unittest.TestCase):
 
         self.assertNotIn(password, message)
         self.assertNotIn(quote(password, safe=""), message)
+
+    def test_redaction_covers_json_escaped_password(self):
+        runner = OfflineRunner()
+        password = 'test-only:"\\secret-é'
+        escaped = json.dumps(password, ensure_ascii=True)[1:-1]
+        runner.remember(password)
+
+        self.assertNotIn(escaped, runner.redact("value=" + escaped))
+
+    def test_non_rfc1918_addresses_are_rejected(self):
+        for address in ("127.0.0.1", "169.254.169.254", "8.8.8.8", "::1", None):
+            with self.subTest(address=address), self.assertRaises(module.ProvisionError):
+                module.private_address(address)
+
+    def test_private_dns_must_match_the_instance_address(self):
+        payload = {
+            "database": "flash_ticket",
+            "app_username": "flash_catalog",
+            "app_password": "test-only-password",
+        }
+        for hostname in (
+            "ip-10-42-20-11.ec2.internal", "mongodb.example.com", ["invalid"],
+        ):
+            with self.subTest(hostname=hostname), self.assertRaises(module.ProvisionError):
+                module.build_uri(
+                    {"private_ip": "10.42.20.10", "private_dns": hostname}, payload
+                )
+
+    def test_invalid_instance_id_type_is_rejected(self):
+        runner = OfflineRunner()
+        with patch.object(runner, "command", return_value=json.dumps({
+            "instance_id": 123, "private_ip": "10.42.20.10",
+        })):
+            with self.assertRaises(module.ProvisionError):
+                module.load_metadata(runner)
+
+    def test_sensitive_aws_request_uses_a_private_temporary_file(self):
+        runner = module.Runner()
+        request = {"Name": "test-parameter", "Value": "test-only-secret"}
+        paths = []
+
+        def inspect_request(arguments, **_options):
+            position = arguments.index("--cli-input-json") + 1
+            path = Path(unquote(urlsplit(arguments[position]).path))
+            paths.append(path)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), request)
+            self.assertNotIn(request["Value"], " ".join(arguments))
+            return '{"Version": 1}'
+
+        with patch.object(runner, "command", side_effect=inspect_request):
+            self.assertEqual(runner.aws("ssm", "put-parameter", request=request), {"Version": 1})
+        self.assertEqual(len(paths), 1)
+        self.assertFalse(paths[0].exists())
+
+    def test_repair_does_not_reset_a_different_failed_module(self):
+        definition = next(
+            node for node in ast.parse(recovery_module.REMOTE_SCRIPT).body
+            if isinstance(node, ast.FunctionDef) and node.name == "scripts_user_failure"
+        )
+        namespace = {"re": re}
+        exec(compile(ast.Module(body=[definition], type_ignores=[]), "<offline-guard>", "exec"), namespace)
+        guard = namespace["scripts_user_failure"]
+
+        self.assertTrue(guard("('scripts_user', RuntimeError('Runparts: 1 failures'))"))
+        self.assertFalse(guard("('other_module', RuntimeError('mentions scripts_user'))"))
+        self.assertFalse(guard("unstructured error mentions scripts_user"))
+        self.assertFalse(guard(None))
+
+    def test_stopped_builder_requires_a_finalizer_record(self):
+        instance_id = "i-0123456789abcdef0"
+        account_id = "123456789012"
+        details = {
+            "ImageId": "ami-0123456789abcdef0",
+            "State": {"Name": "stopped"},
+            "Tags": [
+                {"Key": "Project", "Value": "flash-ticket"},
+                {"Key": "Environment", "Value": "dev"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proof_path = root / "output" / f"mongo-ami-{instance_id}.validated.json"
+            proof_path.parent.mkdir()
+            proof_path.write_text(json.dumps({
+                "InstanceId": instance_id,
+                "AccountId": account_id,
+                "BaseImageId": details["ImageId"],
+                "ValidationCommandId": "12345678-1234-1234-1234-123456789abc",
+            }), encoding="utf-8")
+            with (
+                patch.object(bake_module, "command", return_value={"instance_id": instance_id}),
+                patch.object(bake_module, "instance", return_value=details),
+                patch.object(bake_module, "existing_image", return_value=None),
+                patch.object(bake_module, "invocation", return_value={
+                    "Status": "Success", "ResponseCode": 0,
+                }),
+                patch.object(bake_module, "aws", return_value={"Account": account_id}) as aws,
+            ):
+                with self.assertRaisesRegex(bake_module.BakeError, "finalization record"):
+                    bake_module.bake(root)
+                aws.assert_called_once_with(root, "sts", "get-caller-identity")
 
 
 if __name__ == "__main__":

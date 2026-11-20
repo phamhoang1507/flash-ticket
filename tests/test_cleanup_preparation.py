@@ -1,8 +1,19 @@
 """Offline regression checks for Terraform cleanup plan authorization."""
 
 from copy import deepcopy
+from argparse import Namespace
+from contextlib import redirect_stdout
+import io
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
 
+from scripts import aws_dev_power as power
+from scripts import deploy_dev as deploy
 from scripts.deploy_dev import BOOTSTRAP, FOUNDATION, DeployError, cleanup_targets, validate_cleanup_plan
 
 
@@ -210,6 +221,139 @@ class CleanupPlanAuthorizationTests(unittest.TestCase):
             with self.subTest(case=index):
                 with self.assertRaises(DeployError):
                     validate_cleanup_plan(document, {S3_ADDRESS: "aws_s3_bucket"})
+
+
+class OperationalSafetyTests(unittest.TestCase):
+    def test_expired_login_has_actionable_commands_and_permission_errors_do_not(self):
+        result = subprocess.CompletedProcess(
+            ["aws"], 255, stdout="", stderr="Error when retrieving credentials from login: Your login session has expired.")
+        with patch.object(deploy.subprocess, "run", return_value=result):
+            with self.assertRaises(DeployError) as caught:
+                deploy.identity()
+        self.assertIn("aws login --profile flash-ticket-dev", str(caught.exception))
+        self.assertIn("aws sts get-caller-identity --profile flash-ticket-terraform", str(caught.exception))
+        self.assertNotIn("aws login", deploy.auth_error_hint("AccessDenied: permission is missing"))
+
+    def test_ecr_only_treats_the_explicit_image_not_found_response_as_missing(self):
+        repository = "123456789012.dkr.ecr.us-east-1.amazonaws.com/flash-ticket-dev/booking"
+        with patch.object(deploy, "aws", return_value={"images": [], "failures": [{"failureCode": "ImageNotFound"}]}):
+            self.assertFalse(deploy.ecr_image_exists(repository, "dev-1.0.0-abcdef1"))
+        with patch.object(deploy, "aws", side_effect=DeployError("AccessDenied")):
+            with self.assertRaisesRegex(DeployError, "AccessDenied"):
+                deploy.ecr_image_exists(repository, "dev-1.0.0-abcdef1")
+
+    def test_stop_uses_only_tracked_ecs_api_calls_and_never_applies_terraform(self):
+        names = {name: f"flash-ticket-dev-{name}" for name in deploy.SERVICE_NAMES}
+        runtime = {"ecs": {"cluster_name": "flash-ticket-dev", "service_names": names}}
+        described = {"services": [{"serviceName": name, "status": "ACTIVE"} for name in names.values()]}
+        with patch.object(deploy, "outputs", return_value=runtime), \
+                patch.object(deploy, "aws", side_effect=[described, {}, {}, {}, {}, {}]) as aws, \
+                patch.object(deploy, "flags"), patch.object(deploy, "terraform") as terraform, \
+                redirect_stdout(io.StringIO()):
+            deploy.stop(Namespace())
+        terraform.assert_not_called()
+        updates = [call.args for call in aws.call_args_list if call.args[:2] == ("ecs", "update-service")]
+        self.assertEqual(len(updates), 4)
+        self.assertEqual({arguments[arguments.index("--service") + 1] for arguments in updates}, set(names.values()))
+        self.assertTrue(all(arguments[-2:] == ("--desired-count", "0") for arguments in updates))
+
+    def test_stop_waits_for_an_already_draining_service_without_updating_it(self):
+        names = {name: f"flash-ticket-dev-{name}" for name in deploy.SERVICE_NAMES}
+        services = [{"serviceName": name, "status": "INACTIVE"} for name in names.values()]
+        services[0]["status"] = "DRAINING"
+        with patch.object(deploy, "outputs", return_value={"ecs": {"cluster_name": "dev", "service_names": names}}), \
+                patch.object(deploy, "aws", side_effect=[{"services": services}, {}]) as aws, \
+                patch.object(deploy, "flags"), redirect_stdout(io.StringIO()):
+            deploy.stop(Namespace())
+        self.assertEqual(aws.call_args_list[1].args[:3], ("ecs", "wait", "services-inactive"))
+
+    def test_cancelled_runtime_destroy_does_not_save_disabled_startup_flags(self):
+        arguments = Namespace(yes=False, all=False, bootstrap_bucket=False)
+        with patch.object(deploy, "identity"), \
+                patch.object(deploy, "state_addresses", return_value=["module.data_layer[0].aws_db_instance.mysql"]), \
+                patch.object(deploy, "terraform", side_effect=DeployError("Destroy cancelled")) as terraform, \
+                patch.object(deploy, "flags") as flags:
+            with self.assertRaisesRegex(DeployError, "cancelled"):
+                deploy.destroy(arguments)
+        flags.assert_not_called()
+        self.assertIn("-var=enable_data_layer=false", terraform.call_args.args)
+        self.assertIn("-var=enable_compute=false", terraform.call_args.args)
+
+    def test_runtime_flags_are_saved_only_after_a_successful_destroy(self):
+        events = []
+        arguments = Namespace(yes=False, all=False, bootstrap_bucket=False)
+        with patch.object(deploy, "identity"), \
+                patch.object(deploy, "state_addresses", return_value=["module.data_layer[0].aws_db_instance.mysql"]), \
+                patch.object(deploy, "terraform", side_effect=lambda *args, **kwargs: events.append("destroy")), \
+                patch.object(deploy, "flags", side_effect=lambda **kwargs: events.append("flags")), \
+                redirect_stdout(io.StringIO()):
+            deploy.destroy(arguments)
+        self.assertEqual(events, ["destroy", "flags"])
+
+
+@unittest.skipUnless(shutil.which("git"), "Image provenance checks require the local git executable")
+class ImageSourceProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="flash-ticket-image-inputs-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.environment = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                                GIT_TERMINAL_PROMPT="0", GIT_TEMPLATE_DIR="")
+        self.environment_patch = patch.dict(os.environ, self.environment)
+        self.environment_patch.start()
+        self.addCleanup(self.environment_patch.stop)
+        self.root_patch = patch.object(deploy, "ROOT", self.root)
+        self.root_patch.start()
+        self.addCleanup(self.root_patch.stop)
+        self.log_patch = patch.object(power, "announce")
+        self.log_patch.start()
+        self.addCleanup(self.log_patch.stop)
+        self.files = (
+            ".dockerignore", "shared/auth.py", "services/booking/app/main.py",
+            "services/booking/requirements.txt", "services/catalog/Dockerfile",
+            "scripts/seed_aws_catalog.py", "scripts/reconcile_inventory.py",
+            "assets/demo-banner.svg", "database/001_schema.sql",
+            "tools/mysql-bootstrap/bootstrap.py", "tools/mysql-bootstrap/requirements.txt",
+        )
+        self.git("init", "--quiet")
+        for name in self.files:
+            self.write(name, "original\n")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "test: record image inputs")
+        self.tag = "dev-1.0.0-" + self.git("rev-parse", "--short=12", "HEAD").strip()
+
+    def git(self, *arguments):
+        result = subprocess.run(
+            ["git", "-c", "user.name=Offline Test", "-c", "user.email=offline@example.invalid",
+             "-c", "core.hooksPath=/dev/null", *arguments],
+            cwd=self.root, env=self.environment, capture_output=True, text=True, check=True)
+        return result.stdout
+
+    def write(self, name, contents):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents)
+
+    def test_documentation_and_operational_script_commits_reuse_the_existing_image(self):
+        for name in ("docs/README.md", "scripts/aws_dev_power.py", "services/booking/README.md"):
+            self.write(name, "Operational documentation only\n")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "docs: update deployment instructions")
+        self.assertFalse(power.image_inputs_changed(self.tag))
+
+    def test_changes_to_any_real_docker_input_require_new_images(self):
+        for name in self.files:
+            with self.subTest(input=name):
+                self.write(name, "updated\n")
+                self.assertTrue(power.image_inputs_changed(self.tag))
+                self.write(name, "original\n")
+
+    def test_a_new_untracked_application_module_requires_a_committed_build(self):
+        self.write("services/worker/app/new_module.py", "new source\n")
+        self.assertTrue(power.image_inputs_changed(self.tag))
+
+    def test_unavailable_image_commit_is_not_silently_assumed_to_match(self):
+        self.assertTrue(power.image_inputs_changed("dev-1.0.0-ffffffffffff"))
 
 
 if __name__ == "__main__":

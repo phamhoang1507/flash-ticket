@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app.ticket import create_ticket_pdf
 from shared.aws import aws_client, get_queue_url
 from shared.database import create_db_engine
+from shared.errors import failure_details
 
 logger = logging.getLogger("ticket-worker")
 stop = threading.Event()
@@ -202,9 +203,9 @@ class Heartbeat:
             except Exception as exc:
                 self.lost.set()
                 logger.error(
-                    "Heartbeat failed booking_id=%s error_type=%s",
+                    "Heartbeat failed booking_id=%s %s",
                     self.booking.id,
-                    type(exc).__name__,
+                    failure_details(exc),
                 )
                 return
 
@@ -301,7 +302,7 @@ def process_message(
                     ExpiresIn=900,
                 )
 
-                ses.send_email(
+                delivery = ses.send_email(
                     Source=SES_SENDER,
                     Destination={
                         "ToAddresses": [booking.email]
@@ -327,6 +328,12 @@ def process_message(
                     },
                 )
 
+                logger.info(
+                    "Email accepted booking_id=%s ses_message_id=%s",
+                    booking.id,
+                    delivery.get("MessageId", "unknown"),
+                )
+
                 heartbeat.check()
                 owned_update(booking, "sent")
 
@@ -339,9 +346,9 @@ def process_message(
             release_booking(booking)
         except Exception as exc:
             logger.error(
-                "Lease release failed booking_id=%s error_type=%s",
+                "Lease release failed booking_id=%s %s",
                 booking.id,
-                type(exc).__name__,
+                failure_details(exc),
             )
 
 
@@ -393,17 +400,17 @@ def main():
                         )
                     except Exception as exc:
                         logger.error(
-                            "Message failed message_id=%s error_type=%s",
+                            "Message failed message_id=%s %s",
                             message.get("MessageId", "unknown"),
-                            type(exc).__name__,
+                            failure_details(exc),
                         )
 
             except Exception as exc:
                 failures += 1
 
                 logger.error(
-                    "Polling failed error_type=%s",
-                    type(exc).__name__,
+                    "Polling failed %s",
+                    failure_details(exc),
                 )
 
                 stop.wait(

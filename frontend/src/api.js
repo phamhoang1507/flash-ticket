@@ -27,14 +27,26 @@ export async function api(
     cache: "no-store",
   });
 
-  const data = await response.json().catch(() => ({
-    detail: `HTTP ${response.status}`,
-  }));
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    if (response.ok) {
+      throw new ApiError(502, "API trả về dữ liệu không hợp lệ. Hãy thử lại yêu cầu.");
+    }
+
+    data = { detail: `HTTP ${response.status}` };
+  }
+
+  if (response.ok && (data === null || typeof data !== "object")) {
+    throw new ApiError(502, "API trả về dữ liệu không hợp lệ. Hãy thử lại yêu cầu.");
+  }
 
   if (!response.ok) {
-    const detail = typeof data.detail === "string"
+    const detail = typeof data?.detail === "string"
       ? data.detail
-      : JSON.stringify(data.detail);
+      : JSON.stringify(data?.detail);
 
     throw new ApiError(
       response.status,

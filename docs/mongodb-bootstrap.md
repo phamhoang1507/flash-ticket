@@ -59,7 +59,7 @@ docker rm --force flash-ticket-mongo-bootstrap-test
 
 ## Tích hợp AWS
 
-Ở bước tiếp theo, script quản trị sẽ:
+Wrapper `scripts/provision_mongodb.py` hiện thực hiện:
 
 1. Đọc MongoDB passwords từ SSM SecureString.
 2. Upload bootstrap.js lên private EC2 qua SSH.
@@ -77,7 +77,7 @@ Script:
 scripts/provision_mongodb.py
 ```
 
-### Kiểm tra khi AWS đang được destroy
+### Kiểm tra offline
 
 ```bash
 python3 scripts/provision_mongodb.py --check-only

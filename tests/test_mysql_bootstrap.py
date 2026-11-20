@@ -3,7 +3,9 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, "/app")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_DIRECTORY = PROJECT_ROOT / "tools" / "mysql-bootstrap"
+sys.path.insert(0, str(SOURCE_DIRECTORY) if SOURCE_DIRECTORY.is_dir() else "/app")
 
 import bootstrap
 

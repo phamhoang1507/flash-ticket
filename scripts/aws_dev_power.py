@@ -5,18 +5,30 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import time
 
-import deploy_dev as deploy
+if __package__:
+    from . import deploy_dev as deploy
+else:
+    import deploy_dev as deploy
 
 
 DATA_NAMES = ("rds", "redis", "mongodb")
-SERVICE_NAMES = {"booking", "catalog", "relay", "worker"}
+SERVICE_NAMES = set(deploy.SERVICE_NAMES)
+IMAGE_INPUTS = (
+    ".dockerignore", "shared",
+    *(f"services/{service}/{part}" for service in deploy.SERVICE_NAMES
+      for part in ("Dockerfile", "requirements.txt", "app")),
+    "tools/mysql-bootstrap/Dockerfile", "tools/mysql-bootstrap/requirements.txt",
+    "tools/mysql-bootstrap/bootstrap.py", ":(glob)database/[0-9][0-9][0-9]_*.sql",
+    "assets/demo-banner.svg", "scripts/__init__.py", "scripts/local_token.py",
+    "scripts/seed_catalog.py", "scripts/seed_aws_catalog.py", "scripts/init_queue.py",
+    "scripts/reconcile_inventory.py", "scripts/init_assets.py",
+)
 QUEUE_COUNTS = (
     "ApproximateNumberOfMessages",
     "ApproximateNumberOfMessagesNotVisible",
@@ -29,16 +41,7 @@ def announce(message: str) -> None:
 
 
 def preflight(command: str) -> None:
-    workspace = os.environ.get("TF_WORKSPACE", "").strip()
-    if workspace not in ("", "default"):
-        raise deploy.DeployError(
-            "Dự án dùng Terraform workspace default. Kiểm tra TF_WORKSPACE trước khi chạy tiếp.")
-    for root in (deploy.BOOTSTRAP, deploy.FOUNDATION, deploy.DEV):
-        selection = root / ".terraform/environment"
-        if selection.is_file() and selection.read_text().strip() not in ("", "default"):
-            raise deploy.DeployError(
-                f"Workspace của {root.relative_to(deploy.ROOT)} khác default. "
-                "Kiểm tra state hiện có trước khi đổi workspace; script chưa tạo/xóa tài nguyên.")
+    deploy.require_default_workspace()
     if any(name.startswith("AWS_ENDPOINT_URL") and value
            for name, value in os.environ.items()):
         raise deploy.DeployError("Bỏ các biến AWS_ENDPOINT_URL của LocalStack trước khi dùng AWS thật.")
@@ -114,26 +117,35 @@ def repositories(foundation: dict) -> dict[str, str]:
     return result
 
 
+def image_inputs_changed(tag: str) -> bool:
+    source_commit = tag.rsplit("-", 1)[-1]
+    resolved = deploy.run(["git", "rev-parse", "--verify", f"{source_commit}^{{commit}}"],
+                          capture=True, check=False)
+    if resolved.returncode:
+        announce("Không có Git commit của image cũ trong local history; build lại để xác minh source đang deploy.")
+        return True
+    changed = deploy.run(["git", "diff", "--quiet", resolved.stdout.strip(), "--", *IMAGE_INPUTS],
+                         capture=True, check=False)
+    if changed.returncode not in (0, 1):
+        raise deploy.DeployError("Không so sánh được Docker input với commit của image đã lưu.")
+    untracked = deploy.run(["git", "ls-files", "--others", "--exclude-standard", "--", *IMAGE_INPUTS],
+                           capture=True).stdout.strip()
+    if changed.returncode == 1 or untracked:
+        announce("Backend/Docker input đã thay đổi so với image đã lưu; cần build tag mới từ source đã commit.")
+        return True
+    return False
+
+
 def saved_images_exist(foundation: dict) -> bool:
     tag = deploy.read_flags()["application_image_tag"]
     if not isinstance(tag, str) or not re.fullmatch(r"dev-\d+\.\d+\.\d+-[0-9a-f]{7,40}", tag):
         return False
+    if image_inputs_changed(tag):
+        return False
     complete = True
-    for name, repository in repositories(foundation).items():
-        parts = repository.split("/", 1)
-        if len(parts) != 2:
-            raise deploy.DeployError(f"ECR repository URL không hợp lệ: {name}")
-        result = deploy.aws("ecr", "batch-get-image", "--repository-name", parts[1],
-                            "--image-ids", f"imageTag={tag}")
-        for failure in result.get("failures", []):
-            if failure.get("failureCode") != "ImageNotFound":
-                raise deploy.DeployError(
-                    f"Không xác minh được image {name}: " + str(failure.get("failureCode", "unknown")))
-        images = result.get("images", [])
-        valid = (len(images) == 1 and images[0].get("imageId", {}).get("imageTag") == tag
-                 and bool(images[0].get("imageId", {}).get("imageDigest"))
-                 and bool(images[0].get("imageManifest")))
-        complete = complete and valid
+    for repository in repositories(foundation).values():
+        exists = deploy.ecr_image_exists(repository, tag)
+        complete = complete and exists
     if complete:
         announce(f"Dùng lại đủ năm image đã publish với tag {tag}; không build Docker lại.")
     return complete
@@ -344,33 +356,7 @@ def down(args: argparse.Namespace) -> None:
     announce(f"Account={account}; region={deploy.REGION}; profile={deploy.PROFILE}; workspace=default.")
     if args.mode == "stop":
         announce("Chỉ scale bốn ECS service về 0; RDS, Redis, MongoDB và storage vẫn có thể tính phí.")
-        runtime = deploy.outputs(deploy.DEV)
-        ecs = runtime.get("ecs")
-        if not ecs:
-            announce("Không có ECS runtime trong output hiện tại. Foundation/data nếu còn vẫn có thể tính phí.")
-            return
-        names = ecs.get("service_names", {})
-        cluster = ecs.get("cluster_name")
-        if not cluster or not isinstance(names, dict) or set(names) != SERVICE_NAMES:
-            raise deploy.DeployError("Thiếu tên bốn ECS service được quản lý; chưa tự scale các service không xác minh.")
-        described = deploy.aws("ecs", "describe-services", "--cluster", cluster,
-                               "--services", *names.values())
-        for failure in described.get("failures", []):
-            if failure.get("reason") != "MISSING":
-                raise deploy.DeployError("Không xác minh được ECS service cần tắt: " + str(failure.get("reason", "unknown")))
-        deploy.flags(service_desired_count=0)
-        waiting = []
-        for service in described.get("services", []):
-            if service["serviceName"] not in names.values():
-                raise deploy.DeployError("AWS trả về service nằm ngoài danh sách được quản lý; dừng thao tác.")
-            if service.get("status") == "INACTIVE":
-                continue
-            deploy.aws("ecs", "update-service", "--cluster", cluster,
-                       "--service", service["serviceName"], "--desired-count", "0")
-            waiting.append(service["serviceName"])
-        if waiting:
-            deploy.aws("ecs", "wait", "services-stable", "--cluster", cluster,
-                       "--services", *waiting)
+        deploy.stop(args)
         announce("ECS đã về 0. Không chạy Terraform apply và không xóa/stop database.")
         deploy.status(args)
         return

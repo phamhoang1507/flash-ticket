@@ -34,7 +34,7 @@ export default function App() {
 
   const [selected, setSelected] = useState(null);
   const [quantity, setQuantity] = useState(1);
-  const [email, setEmail] = useState("buyer@example.com");
+  const [email, setEmail] = useState("");
 
   const [attempt, setAttempt] = useState(() => readStored(pendingKey));
   const [booking, setBooking] = useState(() => readStored(bookingKey));
@@ -87,6 +87,10 @@ export default function App() {
         try {
           const result = await api("/events");
 
+          if (!Array.isArray(result)) {
+            throw new Error("Invalid event list response");
+          }
+
           if (active) {
             setEvents(result);
             setEventsError("");
@@ -122,6 +126,12 @@ export default function App() {
 
     async function refresh() {
       if (!active || polls >= 60) return;
+
+      if (document.visibilityState === "hidden") {
+        timer = setTimeout(refresh, 5000);
+        return;
+      }
+
       polls += 1;
 
       try {
@@ -144,10 +154,18 @@ export default function App() {
           return;
         }
 
+        if (failure.status === 403 || failure.status === 404) {
+          setError(failure.message);
+          return;
+        }
+
         setError("Chưa cập nhật được trạng thái vé.");
       }
 
-      if (active) timer = setTimeout(refresh, 2000);
+      if (active) {
+        const delay = Math.min(10000, 2000 * 2 ** Math.floor(polls / 5));
+        timer = setTimeout(refresh, delay + Math.random() * 1000);
+      }
     }
 
     timer = setTimeout(refresh, 1000);
@@ -220,6 +238,10 @@ export default function App() {
         idempotencyKey: current.key,
       });
 
+      if (typeof data.id !== "string" || !data.id) {
+        throw new Error("Invalid booking response");
+      }
+
       const next = { owner: current.owner, data };
 
       sessionStorage.setItem(bookingKey, JSON.stringify(next));
@@ -232,7 +254,7 @@ export default function App() {
     } catch (failure) {
       if (
         failure instanceof ApiError &&
-        [400, 404, 409, 422].includes(failure.status)
+        [400, 403, 404, 409, 422].includes(failure.status)
       ) {
         sessionStorage.removeItem(pendingKey);
         setAttempt(null);
@@ -289,7 +311,7 @@ export default function App() {
     <main className="container">
       <header className="header">
         <a className="brand" href="/">FLASH<span>/</span>TICKET</a>
-        <span className="badge">LOCAL DEMO</span>
+        <span className="badge">DEMO</span>
       </header>
 
       <section className="hero">
@@ -417,6 +439,9 @@ export default function App() {
               Email nhận vé
               <input
                 type="email"
+                autoComplete="email"
+                aria-describedby="recipient-help"
+                placeholder="Địa chỉ email nhận vé của bạn"
                 maxLength="254"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
@@ -427,6 +452,10 @@ export default function App() {
               {busy ? "Đang xử lý..." : "Xác nhận đặt vé"}
             </button>
           </form>
+          <p id="recipient-help">
+            Vé sẽ được gửi đến địa chỉ bạn nhập ở trên.
+            Email đăng nhập không tự thay đổi địa chỉ nhận vé.
+          </p>
         </section>
       )}
 
@@ -435,6 +464,7 @@ export default function App() {
           <h2>Yêu cầu đang chờ xác nhận</h2>
           {attempt.owner === identity ? (
             <>
+              <p>Email nhận vé: {attempt.payload.email}</p>
               <p>
                 Thử lại sẽ kiểm tra yêu cầu cũ, không tạo đơn mới.
               </p>
@@ -462,11 +492,12 @@ export default function App() {
               : "Đang phát hành vé"}
           </h2>
           <p>Mã booking: <code>{ownBooking.id}</code></p>
+          {ownBooking.email && <p>Email nhận vé: {ownBooking.email}</p>}
           <p>
             Số lượng: {ownBooking.quantity}
             {" · "}
             Email: {ownBooking.email_status === "SENT"
-              ? "đã xử lý"
+              ? "dịch vụ email đã tiếp nhận"
               : "đang xử lý"}
           </p>
           <div className="row">

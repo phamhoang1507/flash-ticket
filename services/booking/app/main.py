@@ -48,13 +48,14 @@ class BookingView(BaseModel):
     id: UUID
     event_id: UUID
     quantity: int
+    email: EmailStr
     status: Literal["PENDING", "ISSUED"]
     email_status: Literal["PENDING", "SENT"]
     created_at: datetime
 
 
 BY_KEY = text("""
-    SELECT id, event_id, quantity, status, email_status,
+    SELECT id, event_id, quantity, email, status, email_status,
            created_at, request_hash
     FROM bookings
     WHERE user_id = :user_id
@@ -62,7 +63,7 @@ BY_KEY = text("""
 """)
 
 BY_ID = text("""
-    SELECT id, event_id, quantity, status, email_status,
+    SELECT id, event_id, quantity, email, status, email_status,
            created_at, request_hash
     FROM bookings
     WHERE id = :booking_id
@@ -75,6 +76,7 @@ def view(row) -> BookingView:
         id=row["id"],
         event_id=row["event_id"],
         quantity=row["quantity"],
+        email=row["email"],
         status=row["status"],
         email_status=row["email_status"],
         created_at=row["created_at"].replace(tzinfo=UTC),
@@ -276,6 +278,7 @@ def get_booking(booking_id: UUID, buyer: Buyer):
         raise HTTPException(404, "Booking not found")
 
     return view(row)
+
 
 @app.get("/bookings/{booking_id}/ticket")
 def get_ticket(booking_id: UUID, buyer: Buyer):

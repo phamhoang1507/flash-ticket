@@ -43,7 +43,8 @@ function validateInput(input) {
     if (
       typeof input[key] !== "string" ||
       input[key].length < 16 ||
-      input[key].length > 128
+      input[key].length > 128 ||
+      input[key].includes("\u0000")
     ) {
       throw new Error("Invalid password length.");
     }
@@ -80,7 +81,10 @@ async function bootstrap(input) {
       input.root_username,
       input.root_password,
     );
-  } catch {
+  } catch (error) {
+    if (error.code !== 18) {
+      throw error;
+    }
     stage = "CREATE_FIRST_ROOT_USER";
 
     const initialConnection = await openConnection();
@@ -103,6 +107,21 @@ async function bootstrap(input) {
       input.root_username,
       input.root_password,
     );
+  }
+
+  stage = "VERIFY_ROOT_ROLE";
+
+  const rootUser = await rootConnection
+    .getDB("admin")
+    .getUser(input.root_username);
+  const rootRoles = rootUser?.roles || [];
+
+  if (
+    rootRoles.length !== 1 ||
+    rootRoles[0].role !== "root" ||
+    rootRoles[0].db !== "admin"
+  ) {
+    throw new Error("Existing admin user has unexpected roles.");
   }
 
   stage = "CHECK_APPLICATION_USER";

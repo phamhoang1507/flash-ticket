@@ -18,6 +18,7 @@ from typing import Any
 PROFILE = "flash-ticket-terraform"
 REGION = "us-east-1"
 INSTANCE_ID = re.compile(r"i-(?:[0-9a-f]{8}|[0-9a-f]{17})\Z")
+COMMAND_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
 
 VALIDATE_COMMAND = r"""set -eu
 status_file=/var/lib/flash-ticket/mongo-build.status
@@ -31,6 +32,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
       test "$(systemctl is-enabled mongod.service 2>/dev/null || true)" = disabled
       grep -q 'authorization: enabled' /etc/mongod.conf
       grep -q 'bindIp: 127.0.0.1' /etc/mongod.conf
+      test -f /etc/tmpfiles.d/flash-ticket-sshd.conf
+      /usr/sbin/sshd -t
       dpkg-query --show --showformat='${Package} ${Version}\n' mongodb-org-server ec2-instance-connect openssh-server
       mongod --version
       exit 0
@@ -65,6 +68,8 @@ class CommandError(BakeError):
 
 def command(arguments: list[str], *, root: Path) -> Any:
     environment = dict(os.environ)
+    environment.pop("TF_LOG", None)
+    environment.pop("TF_LOG_PATH", None)
     environment.update(
         AWS_PROFILE=PROFILE,
         AWS_REGION=REGION,
@@ -83,9 +88,12 @@ def command(arguments: list[str], *, root: Path) -> Any:
             text=True,
             capture_output=True,
             check=False,
+            timeout=180,
         )
     except FileNotFoundError as exc:
         raise CommandError(f"Required command is not installed: {arguments[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise CommandError(f"{arguments[0]} timed out; inspect builder state before retrying.") from exc
     if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip()
         raise CommandError(f"{arguments[0]} failed: {detail[-6000:]}")
@@ -348,6 +356,15 @@ def bake(root: Path) -> None:
             finalizer = send_command(
                 root, instance_id, FINALIZE_COMMAND, "Schedule Flash-Ticket MongoDB AMI finalizer"
             )
+            atomic_json(
+                proof_path,
+                {
+                    **expected_proof,
+                    "ValidatedAt": datetime.now(timezone.utc).isoformat(),
+                    "ValidationCommandId": validation,
+                    "FinalizerCommandId": finalizer,
+                },
+            )
             wait_stopped(root, instance_id, finalizer)
         elif state in {"stopping", "stopped"}:
             try:
@@ -357,8 +374,25 @@ def bake(root: Path) -> None:
                     "Builder is stopped/stopping without a saved SSM validation record. "
                     "Start this builder instance and rerun validation; no AMI was created."
                 ) from exc
-            if any(proof.get(key) != value for key, value in expected_proof.items()):
+            if not isinstance(proof, dict) or any(
+                proof.get(key) != value for key, value in expected_proof.items()
+            ):
                 raise BakeError("Saved SSM validation record does not match this builder/account.")
+            for field in ("ValidationCommandId", "FinalizerCommandId"):
+                command_id = proof.get(field)
+                if not isinstance(command_id, str) or not COMMAND_ID.fullmatch(command_id):
+                    raise BakeError(
+                        "The stopped builder has no complete SSM finalization record. "
+                        "Start this builder and rerun validation; no AMI was created."
+                    )
+            result = invocation(root, instance_id, proof["ValidationCommandId"])
+            if not result or result["Status"] != "Success" or result.get("ResponseCode") != 0:
+                raise BakeError(
+                    "Saved SSM validation did not succeed; no AMI was created. "
+                    "Start the builder and inspect it before retrying."
+                )
+            # The finalizer deliberately stops SSM. Its last command status can lag
+            # behind shutdown; the recorded schedule plus EC2 stopped state is used.
             wait_stopped(root, instance_id, None)
         else:
             raise BakeError(f"Builder must be running or previously validated; state is {state}.")

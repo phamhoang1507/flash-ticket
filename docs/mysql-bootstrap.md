@@ -61,14 +61,20 @@ App user không được cấp quyền DDL hoặc quyền trên migration ledger
 
 ## Offline checks
 
+Build image trước khi kiểm tra, từ root repository:
+
 ```bash
+TASK_BOOTSTRAP_TAG="dev-1.0.0-$(git rev-parse --short=12 HEAD)"
+docker build --file tools/mysql-bootstrap/Dockerfile \
+  --tag "flash-ticket/mysql-bootstrap:$TASK_BOOTSTRAP_TAG" .
+
 docker run --rm \
   --network none \
-  flash-ticket/mysql-bootstrap:dev-1.0.0-check \
+  "flash-ticket/mysql-bootstrap:$TASK_BOOTSTRAP_TAG" \
   --check-files
 ```
 
-Đây là kiểm tra files và CA bundle, không kết nối database.
+Build cần network để tải dependencies/CA bundle. Lệnh `--check-files` sau build không kết nối database hoặc AWS. Các lệnh này dành cho bạn chạy khi cần kiểm tra; chúng không phải kết quả của một lần integration test đã chạy.
 
 ## Lifecycle
 

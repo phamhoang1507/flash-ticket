@@ -37,12 +37,23 @@ export function identityFromToken(token) {
 
   if (
     typeof value.iss !== "string" ||
-    typeof value.sub !== "string"
+    !value.iss ||
+    typeof value.sub !== "string" ||
+    !value.sub
   ) {
     return "";
   }
 
   return JSON.stringify([value.iss, value.sub]);
+}
+
+function isCurrentAccessToken(token) {
+  const value = claims(token);
+
+  return Boolean(identityFromToken(token)) &&
+    value.token_use === "access" &&
+    Number.isFinite(value.exp) &&
+    value.exp * 1000 > Date.now();
 }
 
 function getManager() {
@@ -93,9 +104,8 @@ function getManager() {
 export async function initialAccessToken() {
   if (authProvider === "jwt") {
     const token = sessionStorage.getItem(tokenKey) || "";
-    const expiry = claims(token).exp;
 
-    if (!identityFromToken(token) || expiry * 1000 <= Date.now()) {
+    if (!isCurrentAccessToken(token)) {
       sessionStorage.removeItem(tokenKey);
       return "";
     }
@@ -152,13 +162,8 @@ export function onTokenChanged(callback) {
 
 export function saveLocalToken(value) {
   const token = value.trim().replace(/^Bearer\s+/i, "");
-  const expiry = claims(token).exp;
 
-  if (
-    !identityFromToken(token) ||
-    typeof expiry !== "number" ||
-    expiry * 1000 <= Date.now()
-  ) {
+  if (!isCurrentAccessToken(token)) {
     throw new Error("Token không hợp lệ hoặc đã hết hạn.");
   }
 

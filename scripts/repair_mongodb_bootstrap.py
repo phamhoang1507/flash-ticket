@@ -17,6 +17,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import tempfile
@@ -101,6 +102,12 @@ def stage_errors(stage, name):
     return errors
 
 
+def scripts_user_failure(error):
+    return isinstance(error, str) and re.match(
+        r"^\(['\"]scripts[-_]user['\"],\s", error
+    ) is not None
+
+
 def mongo_active():
     return run(["systemctl", "is-active", "--quiet", "mongod"]).returncode == 0
 
@@ -183,11 +190,7 @@ def repair():
                     "Cloud-init has errors outside scripts_user; refusing a targeted reset."
                 )
         failures = stage_errors(v1.get("modules-final"), "modules-final")
-        if not failures or any(
-            not isinstance(error, str)
-            or ("scripts_user" not in error and "scripts-user" not in error)
-            for error in failures
-        ):
+        if not failures or not all(scripts_user_failure(error) for error in failures):
             raise RepairError(
                 "The final-stage errors are not exclusively scripts_user; no state was reset."
             )

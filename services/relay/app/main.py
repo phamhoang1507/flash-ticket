@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from shared.aws import aws_client, get_queue_url
 from shared.database import create_db_engine
+from shared.errors import failure_details
 from shared.inventory import create_redis_client, project_inventory
 
 logger = logging.getLogger("outbox-relay")
@@ -229,9 +230,9 @@ def main():
                 failures += 1
 
                 logger.error(
-                    "Relay failure outbox_id=%s error_type=%s",
+                    "Relay failure outbox_id=%s %s",
                     event.id if event else "none",
-                    type(exc).__name__,
+                    failure_details(exc),
                 )
 
                 if event is not None:
@@ -239,8 +240,8 @@ def main():
                         schedule_retry(event)
                     except Exception as retry_exc:
                         logger.error(
-                            "Retry scheduling failed error_type=%s",
-                            type(retry_exc).__name__,
+                            "Retry scheduling failed %s",
+                            failure_details(retry_exc),
                         )
 
                 delay = min(30, 2 ** min(failures, 5))

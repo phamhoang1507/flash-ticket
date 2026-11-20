@@ -1,370 +1,94 @@
 # Flash-Ticket
 
-Bật/tắt AWS dev bằng hai script: **[Hướng dẫn AWS dev up/down](docs/AWS-DEV-POWER.md)**.
+Hệ thống đặt vé để thực hành Microservices, Transactional Outbox, Docker và triển khai AWS dev. Repository có ứng dụng chạy local và bộ triển khai AWS bằng Terraform/scripts; **chưa có CI/CD GitHub Actions, SNS alerts hoặc load test chứng minh 50.000 users**.
+
+## Bắt đầu từ đâu
+
+| Mục tiêu | Tài liệu |
+|---|---|
+| Chạy từ clone mới trên máy local | [Local development](docs/LOCAL-DEVELOPMENT.md) |
+| Bật, dừng hoặc xóa AWS dev | [AWS dev up/down](docs/AWS-DEV-POWER.md) |
+| Hiểu từng stage triển khai, bootstrap và xử lý lỗi | [AWS deployment quickstart](docs/DEPLOY-DEV-QUICKSTART.md) |
+| Migration, TLS và application user MySQL | [MySQL bootstrap](docs/mysql-bootstrap.md) |
+| MongoDB users, SSH provisioning và kiểm tra credentials | [MongoDB bootstrap](docs/mongodb-bootstrap.md) |
+
+Local cần Docker + Compose v2, Python 3 và OpenSSL. Làm bước tạo `.env`, RSA keys và bootstrap trong local guide trước khi khởi động ứng dụng; `docker compose up` đơn lẻ chưa khởi tạo schema hay S3/SQS/SES.
+
+AWS dev dùng profile `flash-ticket-terraform`, region `us-east-1` và Terraform từ 1.11. Chạy lệnh tại root repository sau khi đọc phạm vi tạo/xóa tài nguyên:
 
 ```bash
 bash scripts/aws-dev-up.sh
-bash scripts/aws-dev-down.sh all
-```
-
-`all` xóa tài nguyên và dữ liệu dev của dự án. Dùng `stop` để chỉ dừng ECS và giữ database; các tài nguyên còn lại vẫn có thể tính phí.
-
-
-Hướng dẫn triển khai dev hiện tại: **[AWS dev deployment quickstart](docs/DEPLOY-DEV-QUICKSTART.md)**. Bản này bổ sung ECS, API Gateway/VPC Link/Cloud Map, Cognito và CloudFront để test toàn bộ luồng.
-
-```bash
 python3 scripts/deploy_dev.py status
-python3 scripts/deploy_dev.py stop
-python3 scripts/deploy_dev.py destroy
+bash scripts/aws-dev-down.sh stop
 ```
 
-`stop` chỉ dừng app; database vẫn tính phí. `destroy` xóa runtime và dữ liệu dev. Đọc quickstart trước khi tạo hoặc xóa tài nguyên. Các phần phía dưới ghi lại các bước đã xây dựng trước đó.
+`stop` chỉ dừng bốn ECS services. RDS, Redis, MongoDB EC2 và storage vẫn tính phí. Muốn xóa runtime/database dùng `down runtime`; xóa toàn bộ phần AWS do dự án quản lý dùng `down all`. Hai mode xóa làm mất dữ liệu; xem runbook trước khi chạy.
 
+## Các thành phần và luồng dữ liệu
 
-Hệ thống đặt vé sự kiện phục vụ việc học Microservices, AWS, Docker,
-Terraform và CI/CD.
-
-Mục tiêu thiết kế là xử lý flash sale có spike traffic, chống bán lố vé
-và phát hành vé bất đồng bộ. Khả năng chịu tải cần được kiểm chứng bằng
-load testing; cấu hình dev không đại diện cho năng lực production.
-
-## 1. Các thành phần
-
-| Thành phần | Công nghệ | Trách nhiệm |
-|---|---|---|
-| Frontend | React + Vite | Hiển thị sự kiện, đặt vé, theo dõi và tải vé |
-| Booking | FastAPI + MySQL | Quản lý inventory, booking và transactional outbox |
-| Catalog | FastAPI + MongoDB + Redis | Metadata sự kiện và inventory projection |
-| Outbox Relay | Python worker | Đọc committed outbox, cập nhật Redis, gửi SQS |
-| Ticket Worker | Python worker | Nhận SQS, tạo PDF/QR, upload S3, cập nhật booking, gửi SES |
-
-Booking và Catalog mở HTTP.
-
-Outbox Relay và Ticket Worker chạy background, không mở HTTP port.
-
-## 2. Luồng đặt vé
-
-1. Người dùng chọn sự kiện trên Frontend.
-2. Frontend gửi request tạo booking cùng access token và Idempotency-Key.
-3. Booking mở một MySQL transaction.
-4. Conditional update trừ inventory nếu còn đủ vé.
-5. Booking tạo đơn PENDING và ghi outbox trong cùng transaction.
-6. Transaction commit.
-7. Relay đọc outbox đã commit.
-8. Relay cập nhật versioned inventory projection trên Redis.
-9. Relay gửi message tới SQS.
-10. Worker nhận message và tạo PDF/QR.
-11. Worker upload file vào S3 private.
-12. Worker cập nhật ticket state và gửi email qua SES.
-13. Worker xóa SQS message sau khi xử lý thành công.
-
-MySQL là nguồn dữ liệu chính xác của inventory.
-
-Redis là projection có độ trễ; số vé hiển thị trên giao diện không phải
-cam kết đặt vé thành công.
-
-SQS Standard và Outbox Relay có thể tạo duplicate delivery. Các bước
-xử lý sử dụng idempotency và database state để hạn chế xử lý trùng.
-
-SES vẫn có khả năng gửi email trùng nếu gửi thành công nhưng tiến trình
-dừng trước khi ghi nhận kết quả vào database.
-
-## 3. API chính
-
-| Service | Endpoint | Chức năng |
-|---|---|---|
-| Catalog | GET /events | Danh sách sự kiện |
-| Catalog | POST /events | Tạo sự kiện dạng draft, yêu cầu quyền quản trị |
-| Booking | POST /bookings | Đặt vé |
-| Booking | GET /bookings/{booking_id} | Xem booking thuộc người dùng hiện tại |
-| Booking | GET /bookings/{booking_id}/ticket | Nhận presigned download URL |
-
-booking_id có định dạng UUID, không phải số nguyên tăng dần.
-
-## 4. Cấu trúc thư mục
-
-```text
-flash-ticket/
-├── frontend/
-├── services/
-│   ├── booking/
-│   ├── catalog/
-│   ├── relay/
-│   └── worker/
-├── shared/
-├── database/
-├── scripts/
-├── assets/
-├── infra/
-│   ├── bootstrap/
-│   ├── modules/
-│   │   ├── mongo_ami_builder//
-│   │   ├── vpc/
-│   │   ├── ecr/
-│   │   ├── iam/
-│   │   ├── task_roles/
-│   │   ├── assets/
-│   │   ├── messaging/
-│   │   ├── ses/
-│   │   └── data_layer/
-│   └── environments/
-│       ├── dev-foundation/
-│       └── dev/
-├── docs/
-│   └── aws-operations.md
-├── .env
-└── .secrets/
-```
-
-`.env`, `.secrets/`, Terraform state, plan files và các file cấu hình
-riêng của môi trường không được commit.
-
-`.terraform.lock.hcl` phải được commit.
-
-## 5. Công cụ cần có
-
-- Git.
-- Docker Engine hoặc Docker Desktop có WSL integration.
-- Docker Compose v2.
-- Python 3 để chạy các script quản trị.
-- AWS CLI v2 hỗ trợ `aws login`.
-- Terraform từ 1.11 trở lên.
-- OpenSSL cho bộ khóa JWT Local.
-
-Kiểm tra:
-
-```bash
-git --version
-docker version
-docker compose version
-python3 --version
-aws --version
-terraform version
-openssl version
-```
-
-## 6. Vận hành Local
-
-Các lệnh trong phần này áp dụng cho bản Local đã có `.env`, RSA keys
-và các tài nguyên bootstrap của MySQL, MongoDB, Redis và LocalStack.
-
-Chạy lệnh từ root repository.
-
-### Kiểm tra Compose
-
-Lệnh này kiểm tra cấu hình mà không in toàn bộ environment:
-
-```bash
-docker compose config --quiet
-```
-
-### Build và khởi động
-
-```bash
-docker compose up -d --build
-```
-
-Kiểm tra:
-
-```bash
-docker compose ps
-```
-
-Xem port được publish:
-
-```bash
-docker compose port frontend 8080
-docker compose port booking 8000
-docker compose port catalog 8000
-```
-
-Khi mở trình duyệt trên cùng máy, sử dụng `localhost` cùng host port
-được hiển thị.
-
-### Xem logs
-
-```bash
-docker compose logs --tail=100 -f booking catalog relay worker
-```
-
-Nhấn Ctrl+C để thoát xem logs. Thao tác này không dừng container.
-
-### Tạo access token Local
-
-Private key được đọc từ stdin, không cần mount vào container:
-
-```bash
-TOKEN="$(
-  docker compose run --rm -T --no-deps booking \
-    python scripts/local_token.py \
-    --subject local-user \
-    < .secrets/private.pem
-)"
-```
-
-Tạo token có quyền quản trị sự kiện:
-
-```bash
-ADMIN_TOKEN="$(
-  docker compose run --rm -T --no-deps booking \
-    python scripts/local_token.py \
-    --subject local-admin \
-    --admin \
-    < .secrets/private.pem
-)"
-```
-
-Token Local có thời hạn. Khi token hết hạn, tạo token mới.
-
-Không commit token hoặc private key.
-
-### Dừng và giữ dữ liệu
-
-```bash
-docker compose stop
-```
-
-Khởi động lại các container đã tồn tại:
-
-```bash
-docker compose start
-```
-
-Nếu đã thay đổi source code hoặc cấu hình:
-
-```bash
-docker compose up -d --build
-```
-
-### Xóa container, giữ named volumes
-
-```bash
-docker compose down --remove-orphans
-```
-
-Khởi động lại:
-
-```bash
-docker compose up -d --build
-```
-
-Lệnh `down` không kèm `--volumes` giữ lại named volumes.
-
-### Xóa cả container và dữ liệu trong Compose volumes
-
-Chỉ chạy khi chấp nhận reset dữ liệu Local:
-
-```bash
-docker compose down --volumes --remove-orphans
-```
-
-Lệnh này không xóa tài nguyên AWS.
-
-LocalStack hiện sử dụng `PERSISTENCE=0`, vì vậy cần chạy lại bước
-bootstrap S3/SQS/SES sau khi LocalStack bị khởi tạo lại. Việc giữ
-database volumes không có nghĩa là tài nguyên LocalStack cũng được giữ.
-
-## 7. Cấu hình ứng dụng
-
-| Cấu hình | Local | AWS |
-|---|---|---|
-| AUTH_PROVIDER | jwt | cognito |
-| AWS_REGION | us-east-1 | us-east-1 |
-| AWS_ENDPOINT_URL | LocalStack endpoint | Không cấu hình |
-| S3_PUBLIC_ENDPOINT | Endpoint LocalStack mà trình duyệt truy cập được | Không cấu hình |
-| ASSETS_PUBLIC_BASE_URL | Theo cấu hình Local | CloudFront URL khi được triển khai |
-| AWS credentials | Credentials giả cho LocalStack | ECS Task Role |
-| Database secrets | `.env` phục vụ Local | SSM SecureString |
-| Ticket signing secret | Secret riêng của Local | Secret riêng của AWS dev |
-
-Không đưa credentials giả của LocalStack vào ECS.
-
-Không đưa AWS access keys cố định vào Docker image.
-
-## 8. Trạng thái cấu hình AWS
-
-Các phần đã có cấu hình:
-
-- S3 backend lưu Terraform state.
-- VPC hai Availability Zones.
-- Public, Private App và Private Data subnets.
-- Security Groups theo luồng kết nối.
-- ECR repositories.
-- ECS Execution Roles và Task Roles.
-- S3 assets private.
-- SQS main queue và DLQ.
-- SES email identity.
-- SSM Standard SecureString secrets.
-- RDS MySQL private, cấu hình Single-AZ cho dev.
-- ElastiCache Redis.
-- EC2 MongoDB private và EC2 Instance Connect Endpoint.
-
-Các phần triển khai tiếp theo:
-
-- EC2 MongoDB.
-- ECS services.
-- API Gateway, VPC Link và Cloud Map.
-- Cognito.
-- S3 frontend và CloudFront.
-- GitHub Actions.
-- Monitoring và load testing.
-
-Có cấu hình Terraform không có nghĩa là tài nguyên đang chạy.
-Kiểm tra bằng Terraform state và AWS CLI.
-
-## 9. Vận hành AWS
-
-Xem hướng dẫn đầy đủ:
-
-[Hướng dẫn AWS và Terraform](docs/aws-operations.md)
-
-Runbook bao gồm:
-
-- Khởi tạo từ đầu.
-- Tạo lại runtime sau khi destroy.
-- Stop/start RDS.
-- Destroy runtime.
-- Xóa foundation.
-- Xóa SSM secrets.
-- Xóa Terraform state bucket.
-- Kiểm tra tài nguyên còn lại.
-
-## 10. Quy tắc image và triển khai
-
-Tag dev:
-
-```text
-dev-1.0.0-<12-character-git-sha>
-```
-
-Tag prod:
-
-```text
-prod-1.0.0
-```
-
-Không sử dụng `latest` làm deployment reference.
-
-ECR repositories sử dụng immutable tags. Khi code ứng dụng thay đổi,
-tạo tag mới thay vì ghi đè tag cũ.
-
-Chỉnh sửa tài liệu không yêu cầu build lại image.
-
-## 11. Những thao tác không tương đương nhau
-
-| Thao tác | Tác động |
+| Thành phần | Trách nhiệm |
 |---|---|
-| Đóng terminal | Không dừng Docker hoặc tài nguyên AWS |
-| AWS logout | Xóa phiên đăng nhập, không dừng tài nguyên |
-| Docker Compose stop | Dừng container Local |
-| RDS stop | Dừng DB compute tạm thời, vẫn giữ storage |
-| Terraform destroy dev | Xóa tài nguyên trong state runtime dev |
-| Terraform destroy foundation | Xóa tài nguyên trong state foundation |
-| Xóa repository trên máy | Không xóa tài nguyên AWS |
+| React + Vite | Danh sách sự kiện, đăng nhập, đặt và tải vé |
+| Catalog — FastAPI | MongoDB metadata, Redis cache và inventory projection |
+| Booking — FastAPI | Atomic inventory update, booking idempotency và outbox MySQL |
+| Outbox Relay — background | Poll committed outbox, cập nhật Redis theo version, publish SQS |
+| Ticket Worker — background | Long poll SQS, PDF/QR, S3, trạng thái ticket và SES |
 
-AWS Budget gửi cảnh báo; Budget hiện tại không tự động tắt tài nguyên.
+Booking commit **inventory + booking PENDING + outbox trong cùng transaction**. Relay và Worker chạy liên tục, không có HTTP port. MySQL quyết định tồn kho; Redis chỉ là projection có độ trễ. Outbox/SQS có thể giao trùng nên consumer phải idempotent. SES có thể gửi lại email nếu process chết sau khi gửi nhưng trước khi lưu kết quả.
 
-- [MongoDB user bootstrap và Local checks](docs/mongodb-bootstrap.md)
+API chính: `GET /events`, `POST /events` (tạo DRAFT, scope quản trị), `POST /bookings`, `GET /bookings/{booking_id}`, `GET /bookings/{booking_id}/ticket`. Booking ID là UUID. Request đặt vé có access token và `Idempotency-Key`; vé được tải bằng presigned URL sau khi kiểm tra chủ sở hữu.
 
-- [MySQL bootstrap image và migration policy](docs/mysql-bootstrap.md)
+## Ranh giới local và AWS
 
+| Thành phần | Local | AWS dev |
+|---|---|---|
+| Auth | Custom JWT RS256, CLI cấp token | Cognito Authorization Code + PKCE |
+| Ingress | Nginx proxy `/api/*` | HTTP API → VPC Link → Cloud Map → task private IP |
+| Storage/messaging/email | LocalStack S3/SQS/SES, credentials giả | AWS services và ECS Task Roles |
+| Data | MySQL/MongoDB/Redis containers | RDS, private EC2 MongoDB, ElastiCache |
+| Secrets | `.env`, JWT keys local | SSM Standard SecureString |
+| Network | Compose network | Hai AZ, public/private-app/private-data subnets |
+
+Cấu hình dev không tạo NAT Gateway/ALB, dùng task public IP với SG giới hạn ingress và data nodes đơn. Fargate Spot/`desired_count=1` tiết kiệm nhưng không bảo đảm HA hoặc zero downtime. MongoDB app connection hiện chưa có TLS; SSH quản trị được mã hóa. Các cờ hạ tầng không tự biến toàn bộ hệ thống thành production HA.
+
+## Kiểm tra offline
+
+Unit tests kiểm tra logic với dữ liệu giả và process mocks, không khởi động database hay gọi AWS. Nếu muốn chạy trên host, dùng môi trường Python riêng:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r services/booking/requirements.txt -r services/catalog/requirements.txt
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Các integration scripts trong `scripts/test_*` cần Docker và được hướng dẫn riêng ở tài liệu bootstrap. Kết quả unit tests không thay thế load test hoặc kiểm chứng triển khai AWS.
+
+## Thư mục và file cần giữ
+
+```text
+frontend/       React, Vite, Nginx
+services/       booking, catalog, relay, worker
+shared/         Auth, AWS clients, database, inventory projection
+database/       SQL migrations bất biến
+scripts/        Local initialization và AWS orchestration
+infra/          Bootstrap state bucket, foundation, runtime và modules
+tools/          MySQL one-off bootstrap image
+tests/          Offline và integration checks
+docs/           Các hướng dẫn hiện hành
+```
+
+Không commit `.env`, `.secrets/`, Terraform state/plan, `backend.hcl` hoặc tfvars chứa cấu hình riêng. Commit lockfiles và migration mới; không sửa migration đã áp dụng. **Giữ bản sao an toàn của local bootstrap state/backup và `.secrets/aws-dev-secrets.json`**: clone Git không phục hồi được chúng.
+
+Sau khi sửa source, review rồi commit/push trên branch làm việc:
+
+```bash
+git switch -c chore/maintain-flash-ticket
+git status --short
+git add README.md docs .env.example .gitignore .dockerignore compose.yaml compose.override.yaml
+git diff --cached --check
+git diff --cached --name-only
+git commit -m "docs: consolidate local and AWS dev workflows"
+git push -u origin HEAD
+```
+
+Chỉ stage các thay đổi đã review; lệnh trên dành cho nhóm file hướng dẫn/cấu hình, không tự gom mọi thay đổi source. Quy trình build/push Docker Hub có trong local guide; ECR build/push dùng stage `images` theo Git SHA, không phụ thuộc `latest`.

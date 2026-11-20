@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = "flash-ticket-terraform"
+LOGIN_PROFILE = "flash-ticket-dev"
 REGION = "us-east-1"
 PREFIX = "/flash-ticket/dev"
 DEMO_EVENT_ID = "11111111-1111-4111-8111-111111111111"
@@ -31,6 +33,15 @@ FLAGS = DEV / "launch.auto.tfvars"
 STAGES = ("prepare", "bake", "data", "images", "bootstrap", "start",
           "frontend", "status", "stop", "destroy")
 SENSITIVE: set[str] = set()
+SERVICE_NAMES = ("booking", "catalog", "relay", "worker")
+RUNTIME_DISABLED_FLAGS = {
+    "enable_data_layer": False,
+    "enable_compute": False,
+    "enable_redis": False,
+    "enable_mongodb": False,
+    "enable_mongo_ami_builder": False,
+    "service_desired_count": 0,
+}
 DEFAULT_FLAGS: dict[str, object] = {
     "enable_data_layer": False,
     "enable_compute": False,
@@ -56,29 +67,61 @@ def redact(value: str) -> str:
     return value
 
 
+def auth_error_hint(message: str, profile: str = PROFILE) -> str:
+    normalized = message.casefold()
+    markers = (
+        "expiredtoken", "invalidclienttokenid", "unauthorizedssotoken",
+        "session has expired", "session is expired", "token has expired",
+        "token is expired", "refresh token has expired", "error loading sso token",
+        "sso session associated with this profile has expired",
+    )
+    if not any(marker in normalized for marker in markers):
+        return message
+    login_profile = LOGIN_PROFILE if profile == PROFILE else profile
+    login = "sso login" if "sso" in normalized else "login"
+    return (
+        message + "\nPhiên AWS đã hết hạn hoặc thông tin đăng nhập không còn hợp lệ. Chạy:\n"
+        f"  aws {login} --profile {shlex.quote(login_profile)}\n"
+        f"  aws sts get-caller-identity --profile {shlex.quote(profile)} --region {REGION}\n"
+        "Sau khi đăng nhập thành công, chạy lại lệnh vừa lỗi."
+    )
+
+
+def require_default_workspace() -> None:
+    if os.environ.get("TF_WORKSPACE", "") not in ("", "default"):
+        raise DeployError("Dự án dùng workspace default; kiểm tra TF_WORKSPACE trước khi chạy tiếp.")
+    for root in (BOOTSTRAP, FOUNDATION, DEV):
+        selection = root / ".terraform/environment"
+        if selection.is_file() and selection.read_text().strip() not in ("", "default"):
+            raise DeployError(
+                f"Workspace của {root.relative_to(ROOT)} khác default. "
+                "Kiểm tra state hiện có trước khi đổi workspace; script chưa thay đổi tài nguyên.")
+
+
 def run(command: list[str], *, data: str | None = None,
         capture: bool = False, check: bool = True,
         env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     process_env = dict(os.environ)
     process_env.pop("TF_LOG", None)
     process_env.pop("TF_LOG_PATH", None)
+    process_env["AWS_PAGER"] = ""
+    process_env["AWS_CLI_AUTO_PROMPT"] = "off"
     if env:
         process_env.update(env)
     result = subprocess.run(command, cwd=ROOT, input=data, text=True,
                             capture_output=capture, env=process_env)
     if check and result.returncode:
-        detail = redact((result.stderr or result.stdout or "").strip())
+        detail = auth_error_hint(redact((result.stderr or result.stdout or "").strip()))
         raise DeployError(f"Command failed ({result.returncode}): {command[0]}\n{detail}")
     return result
 
 
-def aws(*arguments: str, payload: dict | None = None,
-        allow_failure: bool = False) -> dict | list | str | None:
+def aws(*arguments: str, payload: dict | None = None) -> dict:
     command = ["aws", "--profile", PROFILE, "--region", REGION,
                "--no-cli-pager", *arguments, "--output", "json"]
     try:
         if payload is None:
-            result = run(command, capture=True, check=not allow_failure)
+            result = run(command, capture=True)
         else:
             with tempfile.TemporaryDirectory(prefix="flash-ticket-aws-request-") as directory:
                 request_file = Path(directory) / "request.json"
@@ -87,13 +130,11 @@ def aws(*arguments: str, payload: dict | None = None,
                     json.dump(payload, stream, ensure_ascii=True, allow_nan=False)
                 result = run(
                     [*command, "--cli-input-json", request_file.as_uri()],
-                    capture=True, check=not allow_failure,
+                    capture=True,
                 )
     except DeployError as error:
         operation = " ".join(arguments[:2])
         raise DeployError(f"AWS {operation}: {error}") from None
-    if result.returncode:
-        return None
     return json.loads(result.stdout) if result.stdout.strip() else {}
 
 
@@ -342,6 +383,25 @@ def data_stage(args: argparse.Namespace) -> None:
     print("Data nodes are running and consuming credits. Next: bootstrap (publish images first if not done)")
 
 
+def ecr_image_exists(repository: str, tag: str) -> bool:
+    parts = repository.split("/", 1)
+    if len(parts) != 2 or not parts[1]:
+        raise DeployError("ECR repository URL is invalid.")
+    result = aws("ecr", "batch-get-image", "--repository-name", parts[1],
+                 "--image-ids", f"imageTag={tag}")
+    failures = result.get("failures", [])
+    images = result.get("images", [])
+    if failures:
+        if not images and all(failure.get("failureCode") == "ImageNotFound" for failure in failures):
+            return False
+        codes = ", ".join(str(failure.get("failureCode", "unknown")) for failure in failures)
+        raise DeployError(f"Cannot verify ECR image {parts[1]}:{tag}: {codes}")
+    if (len(images) != 1 or images[0].get("imageId", {}).get("imageTag") != tag
+            or not images[0].get("imageId", {}).get("imageDigest") or not images[0].get("imageManifest")):
+        raise DeployError(f"ECR returned an incomplete image response for {parts[1]}:{tag}.")
+    return True
+
+
 def images(args: argparse.Namespace) -> None:
     foundation = require_foundation_outputs(
         "ecr_repository_urls", "mysql_bootstrap_repository_url", "ecr_registry_url"
@@ -367,10 +427,7 @@ def images(args: argparse.Namespace) -> None:
         run([*docker, "login", "--username", "AWS", "--password-stdin", registry], data=login)
         for name, repository in repositories.items():
             remote = f"{repository}:{tag}"
-            repository_name = repository.split("/", 1)[1]
-            existing = aws("ecr", "describe-images", "--repository-name", repository_name,
-                           "--image-ids", f"imageTag={tag}", allow_failure=True)
-            if existing:
+            if ecr_image_exists(repository, tag):
                 print(f"Already published: {remote}")
                 continue
             dockerfile = ("tools/mysql-bootstrap/Dockerfile" if name == "mysql_bootstrap"
@@ -555,14 +612,38 @@ def status(args: argparse.Namespace) -> None:
 
 def stop(args: argparse.Namespace) -> None:
     runtime = outputs(DEV)
-    if not runtime.get("ecs"):
+    ecs = runtime.get("ecs")
+    if not ecs:
         print("No ECS runtime in state. Nothing to scale down.")
         return
+    names = ecs.get("service_names", {})
+    cluster = ecs.get("cluster_name")
+    if not cluster or not isinstance(names, dict) or set(names) != set(SERVICE_NAMES):
+        raise DeployError("Cannot verify the four tracked ECS services; no service was changed.")
+    described = aws("ecs", "describe-services", "--cluster", cluster, "--services", *names.values())
+    for failure in described.get("failures", []):
+        if failure.get("reason") != "MISSING":
+            raise DeployError("Cannot inspect ECS services before stopping: " + str(failure.get("reason", "unknown")))
     flags(service_desired_count=0)
-    apply(DEV, args, runtime=True)
-    ecs = require_outputs("ecs")["ecs"]
-    aws("ecs", "wait", "services-stable", "--cluster", ecs["cluster_name"],
-        "--services", *ecs["service_names"].values())
+    active, draining = [], []
+    for service in described.get("services", []):
+        name = service.get("serviceName")
+        if name not in names.values():
+            raise DeployError("AWS returned a service outside the tracked project; stopping was interrupted.")
+        state = service.get("status")
+        if state == "INACTIVE":
+            continue
+        if state == "DRAINING":
+            draining.append(name)
+            continue
+        if state != "ACTIVE":
+            raise DeployError(f"Unexpected ECS service state for {name}: {state}")
+        aws("ecs", "update-service", "--cluster", cluster, "--service", name, "--desired-count", "0")
+        active.append(name)
+    if active:
+        aws("ecs", "wait", "services-stable", "--cluster", cluster, "--services", *active)
+    if draining:
+        aws("ecs", "wait", "services-inactive", "--cluster", cluster, "--services", *draining)
     print("ECS desired_count=0. RDS, Redis, EC2, storage and other resources can still consume credits.")
     print("For daily cost cleanup: python3 scripts/deploy_dev.py destroy")
 
@@ -599,6 +680,9 @@ def destroy_root(root: Path, args: argparse.Namespace, *, runtime: bool = False)
     options = ["destroy"]
     if args.yes:
         options.append("-auto-approve")
+    if runtime:
+        # Override only this destroy invocation; cancellation leaves saved startup flags intact.
+        options.extend(f"-var={name}={json.dumps(value)}" for name, value in RUNTIME_DISABLED_FLAGS.items())
     terraform(root, *options, runtime=runtime)
 
 
@@ -713,9 +797,8 @@ def destroy(args: argparse.Namespace) -> None:
         raise DeployError("--bootstrap-bucket requires --all; remote states must be removed last.")
     # Terraform destroy must still receive the ephemeral SSM passwords while data exists.
     # No apply is run to prepare destruction, so absent resources cannot be recreated.
-    flags(enable_data_layer=False, enable_compute=False, enable_redis=False,
-          enable_mongodb=False, enable_mongo_ami_builder=False, service_desired_count=0)
     destroy_root(DEV, args, runtime=True)
+    flags(**RUNTIME_DISABLED_FLAGS)
     if not args.all:
         print("Runtime removed. Foundation, SSM, AMI/EBS snapshots and state bucket retained.")
         print("AMI/ECR/S3/state storage can still consume credits. To remove them: destroy --all")
@@ -754,6 +837,7 @@ def main() -> int:
             raise DeployError(f"Required command is missing: {executable}")
     if REGION != "us-east-1":
         raise DeployError("This dev tutorial currently uses us-east-1 and the existing helper scripts.")
+    require_default_workspace()
     os.umask(0o077)
     actions = {"prepare": prepare, "bake": bake, "data": data_stage, "images": images,
                "bootstrap": bootstrap, "start": start, "frontend": frontend,
@@ -772,4 +856,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Interrupted. Existing AWS resources remain; inspect status before retrying.", file=sys.stderr)
         raise SystemExit(130)
-

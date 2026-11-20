@@ -9,6 +9,11 @@ import subprocess
 import sys
 import tempfile
 
+if __package__:
+    from .deploy_dev import auth_error_hint
+else:
+    from deploy_dev import auth_error_hint
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_FILE = PROJECT_ROOT / ".secrets" / "aws-dev-secrets.json"
@@ -59,7 +64,7 @@ def aws_json(profile, region, *arguments):
         for value in REDACTED_VALUES:
             message = message.replace(value, "[REDACTED]")
 
-        raise RuntimeError(message)
+        raise RuntimeError(auth_error_hint(message, profile))
 
     return json.loads(result.stdout)
 

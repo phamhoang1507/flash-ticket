@@ -33,6 +33,9 @@ CATALOG_URI_PARAMETER = (
 )
 
 REMOTE_SCRIPT = "/usr/local/lib/flash-ticket/bootstrap-mongodb.js"
+PRIVATE_NETWORKS = tuple(ipaddress.ip_network(cidr) for cidr in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+))
 
 READINESS_COMMAND = r"""set -u
 cloud_init_result=0
@@ -61,6 +64,7 @@ class Runner:
         if value:
             self.secret_values.add(value)
             self.secret_values.add(quote(value, safe=""))
+            self.secret_values.add(json.dumps(value, ensure_ascii=True)[1:-1])
 
     def redact(self, text):
         for value in sorted(
@@ -133,6 +137,16 @@ class Runner:
         return json.loads(output) if output.strip() else {}
 
 
+def private_address(value):
+    try:
+        address = ipaddress.ip_address(value)
+    except (TypeError, ValueError) as error:
+        raise ProvisionError("MongoDB private_ip must be an RFC1918 IPv4 address.") from error
+    if address.version != 4 or not any(address in network for network in PRIVATE_NETWORKS):
+        raise ProvisionError("MongoDB private_ip must be an RFC1918 IPv4 address.")
+    return address
+
+
 def load_metadata(runner):
     output = runner.command([
         "terraform",
@@ -149,20 +163,13 @@ def load_metadata(runner):
             "MongoDB output is missing. Restore the infrastructure first."
         )
 
-    if not re.fullmatch(
+    if not isinstance(metadata.get("instance_id"), str) or not re.fullmatch(
         r"i-[0-9a-f]{17}",
         metadata.get("instance_id", ""),
     ):
         raise ProvisionError("Invalid MongoDB instance ID.")
 
-    address = ipaddress.ip_address(
-        metadata.get("private_ip", "")
-    )
-
-    if address.version != 4 or not address.is_private:
-        raise ProvisionError(
-            "MongoDB must have a private IPv4 address."
-        )
+    private_address(metadata.get("private_ip"))
 
     return metadata
 
@@ -200,14 +207,12 @@ def load_passwords(runner):
                 f"SSM parameter must be SecureString: {name}"
             )
 
-        value = parameter["Value"]
-        runner.remember(value)
-
-        if not 16 <= len(value) <= 128 or "\x00" in value:
+        value = parameter.get("Value")
+        if not isinstance(value, str) or not 16 <= len(value) <= 128 or "\x00" in value:
             raise ProvisionError(
                 f"Invalid password format in SSM parameter: {name}"
             )
-
+        runner.remember(value)
         values[field] = value
 
     return values
@@ -268,10 +273,16 @@ def bootstrap_remote(runner, payload):
 
 
 def build_uri(metadata, payload):
-    host = metadata.get("private_dns") or metadata["private_ip"]
-
-    if not re.fullmatch(r"[A-Za-z0-9.-]+", host):
-        raise ProvisionError("Invalid MongoDB hostname.")
+    address = private_address(metadata.get("private_ip"))
+    hostname = metadata.get("private_dns")
+    if hostname is not None and not isinstance(hostname, str):
+        raise ProvisionError("MongoDB private DNS must be a string.")
+    host = hostname or str(address)
+    prefix = "ip-" + str(address).replace(".", "-") + "."
+    if host != str(address) and host not in {
+        prefix + "ec2.internal", prefix + AWS_REGION + ".compute.internal",
+    }:
+        raise ProvisionError("MongoDB private DNS does not match its private IP/region.")
 
     username = quote(payload["app_username"], safe="")
     password = quote(payload["app_password"], safe="")

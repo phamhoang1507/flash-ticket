@@ -8,5 +8,11 @@
 **/node_modules
 **/dist
 *.log
+**/.terraform
+**/*.tfstate*
+**/*.tfvars
+**/*.tfvars.json
+**/*.tfplan
+**/backend.hcl
 infra/
 output/

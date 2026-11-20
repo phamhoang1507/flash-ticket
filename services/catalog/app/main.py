@@ -131,7 +131,7 @@ def load_metadata(request: Request) -> list[EventMetadata]:
             )
             for document in documents
         ]
-    except (PyMongoError, ValidationError):
+    except (PyMongoError, ValidationError, KeyError, TypeError):
         raise HTTPException(
             503,
             "Event catalog temporarily unavailable",
