@@ -6,6 +6,7 @@ Hệ thống đặt vé để thực hành Microservices, Transactional Outbox, 
 
 | Mục tiêu | Tài liệu |
 |---|---|
+| Mới tham gia: hiểu code, kiến trúc và tự bảo trì dự án | [Bộ onboarding theo source: 7 chương](docs/onboarding/README.md) |
 | Chạy từ clone mới trên máy local | [Local development](docs/LOCAL-DEVELOPMENT.md) |
 | Bật, dừng hoặc xóa AWS dev | [AWS dev up/down](docs/AWS-DEV-POWER.md) |
 | Hiểu từng stage triển khai, bootstrap và xử lý lỗi | [AWS deployment quickstart](docs/DEPLOY-DEV-QUICKSTART.md) |
